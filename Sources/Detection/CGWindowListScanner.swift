@@ -89,9 +89,9 @@ final class CGWindowListScanner: @unchecked Sendable {
         if windows.count > 10 {
             let withNames = windows.filter { !$0.windowName.isEmpty }
             if withNames.count < 5 {
-                DetectionLogger.shared.error(.detection,
-                    "Screen Recording permission may be stale — \(windows.count) windows but only \(withNames.count) have titles. Re-grant in System Settings."
-                )
+                let msg = "Screen Recording permission may be stale — " +
+                    "\(windows.count) windows but only \(withNames.count) have titles. Re-grant in System Settings."
+                DetectionLogger.shared.error(.detection, msg)
             }
         }
 
