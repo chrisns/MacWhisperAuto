@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "peekaboo": {
+      "type": "stdio",
+      "command": "/opt/homebrew/bin/peekaboo",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}
