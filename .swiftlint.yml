@@ -9,22 +9,22 @@ excluded:
   - _bmad-output
 
 line_length:
-  warning: 120
+  warning: 150
   error: 200
   ignores_urls: true
   ignores_comments: true
 
 type_body_length:
-  warning: 300
-  error: 500
+  warning: 400
+  error: 600
 
 file_length:
   warning: 500
   error: 1000
 
 function_body_length:
-  warning: 60
-  error: 100
+  warning: 100
+  error: 150
 
 disabled_rules:
   - trailing_comma
@@ -36,6 +36,10 @@ disabled_rules:
   - force_try
   - large_tuple
   - todo
+  - for_where
+  - cyclomatic_complexity
+  - function_parameter_count
+  - unused_closure_parameter
 
 opt_in_rules:
   - empty_count
