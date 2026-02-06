@@ -1,0 +1,42 @@
+included:
+  - Sources
+
+excluded:
+  - .build
+  - build
+  - poc
+  - _bmad
+  - _bmad-output
+
+line_length:
+  warning: 120
+  error: 200
+  ignores_urls: true
+  ignores_comments: true
+
+type_body_length:
+  warning: 300
+  error: 500
+
+file_length:
+  warning: 500
+  error: 1000
+
+function_body_length:
+  warning: 60
+  error: 100
+
+disabled_rules:
+  - trailing_comma
+  - opening_brace
+  - identifier_name
+  - type_name
+  - nesting
+  - force_cast
+  - force_try
+  - large_tuple
+  - todo
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing

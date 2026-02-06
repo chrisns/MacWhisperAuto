@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build .app bundle
+        run: scripts/build.sh
+
+      - name: Zip .app bundle
+        run: |
+          cd build
+          zip -r MacWhisperAuto.app.zip MacWhisperAuto.app
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            build/MacWhisperAuto.app.zip \
+            --title "MacWhisperAuto ${{ github.ref_name }}" \
+            --generate-notes

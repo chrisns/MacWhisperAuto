@@ -15,6 +15,9 @@ DerivedData/
 build/
 *.app
 
+# Node (CI lint)
+node_modules/
+
 # IDE
 .idea/
 *.swp

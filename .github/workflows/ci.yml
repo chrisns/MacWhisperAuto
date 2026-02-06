@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Lint
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Install SwiftLint
+        run: brew install swiftlint || true
+
+      - name: SwiftLint
+        run: swiftlint lint --strict --reporter github-actions-logging
+
+  extension-lint:
+    name: Extension Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install ESLint
+        run: npm install --no-save eslint@9
+
+      - name: ESLint
+        run: npx eslint Extension/
