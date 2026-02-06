@@ -123,6 +123,24 @@ let currentPlatform = null;
 let lastReportedActive = null;
 let mutationDebounceTimer = null;
 let periodicCheckTimer = null;
+let observer = null;
+let consecutiveInactiveChecks = 0;
+const INACTIVE_THRESHOLD = 3; // Require 3 consecutive inactive checks (~9s) before reporting ended
+
+function isContextValid() {
+  try {
+    return !!chrome.runtime?.id;
+  } catch {
+    return false;
+  }
+}
+
+function teardown() {
+  warn('Extension context invalidated — stopping content script');
+  if (periodicCheckTimer) { clearInterval(periodicCheckTimer); periodicCheckTimer = null; }
+  if (mutationDebounceTimer) { clearTimeout(mutationDebounceTimer); mutationDebounceTimer = null; }
+  if (observer) { observer.disconnect(); observer = null; }
+}
 
 // --- Platform Detection ---
 
@@ -153,6 +171,14 @@ function checkMeetingActive(platform) {
 // --- Reporting ---
 
 function reportMeetingStatus(platform, isActive) {
+  if (isActive) {
+    consecutiveInactiveChecks = 0;
+  } else {
+    consecutiveInactiveChecks++;
+    // Don't report inactive until threshold reached (prevents DOM flicker)
+    if (consecutiveInactiveChecks < INACTIVE_THRESHOLD) return;
+  }
+
   // Only report on state changes to avoid spamming
   if (isActive === lastReportedActive) return;
   lastReportedActive = isActive;
@@ -167,8 +193,10 @@ function reportMeetingStatus(platform, isActive) {
 
   log(isActive ? 'Meeting detected:' : 'Meeting ended:', platform);
 
+  if (!isContextValid()) { teardown(); return; }
   chrome.runtime.sendMessage(message, (response) => {
     if (chrome.runtime.lastError) {
+      if (chrome.runtime.lastError.message?.includes('context invalidated')) { teardown(); return; }
       warn('Failed to send message to service worker:', chrome.runtime.lastError.message);
     }
   });
@@ -181,17 +209,28 @@ function reportMeetingStatus(platform, isActive) {
 function sendPeriodicStatus(platform) {
   const isActive = checkMeetingActive(platform);
 
+  if (isActive) {
+    consecutiveInactiveChecks = 0;
+  } else {
+    consecutiveInactiveChecks++;
+  }
+
+  // Don't report inactive unless threshold reached (prevents DOM flicker false negatives)
+  const reportActive = isActive || consecutiveInactiveChecks < INACTIVE_THRESHOLD;
+
   const message = {
     type: 'meeting_status',
     platform,
-    is_active: isActive,
+    is_active: reportActive,
     url: location.href,
     title: document.title,
     timestamp: new Date().toISOString()
   };
 
+  if (!isContextValid()) { teardown(); return; }
   chrome.runtime.sendMessage(message, (response) => {
     if (chrome.runtime.lastError) {
+      if (chrome.runtime.lastError.message?.includes('context invalidated')) { teardown(); return; }
       warn('Periodic status send failed:', chrome.runtime.lastError.message);
     }
   });
@@ -200,6 +239,7 @@ function sendPeriodicStatus(platform) {
 // --- Mutation Handling ---
 
 function onDomMutation() {
+  if (!isContextValid()) { teardown(); return; }
   if (mutationDebounceTimer) return;
   mutationDebounceTimer = setTimeout(() => {
     mutationDebounceTimer = null;
@@ -222,7 +262,7 @@ function init() {
   log(`Platform detected: ${currentPlatform}`);
 
   // MutationObserver for dynamic DOM changes
-  const observer = new MutationObserver(onDomMutation);
+  observer = new MutationObserver(onDomMutation);
   observer.observe(document.body, {
     childList: true,
     subtree: true,

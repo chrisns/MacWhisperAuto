@@ -1,11 +1,24 @@
 import Foundation
+import os
 
 /// Parses browser extension WebSocket messages into MeetingSignals.
 /// Handles heartbeats (full state) and individual meeting events.
 /// Malformed messages are logged and discarded (NFR14).
+///
+/// Multi-connection grace period: When multiple browser profiles connect
+/// simultaneously, one may report 0 meetings while another has an active
+/// meeting. Inactive signals are suppressed for `inactiveGracePeriod`
+/// seconds after the last active meeting was seen from ANY connection.
 final class ExtensionMessageHandler: Sendable {
     let onSignal: @Sendable (MeetingSignal) -> Void
     let onConnectionStateChanged: @Sendable (Bool) -> Void
+
+    /// Only emit inactive after no connection has reported meetings for this long.
+    /// Must exceed the heartbeat interval (~20s) to survive interleaved heartbeats.
+    private static let inactiveGracePeriod: TimeInterval = 30.0
+
+    /// Thread-safe timestamp of last heartbeat/event with active meetings.
+    private let _lastActiveMeeting = OSAllocatedUnfairLock<Date?>(initialState: nil)
 
     init(
         onSignal: @escaping @Sendable (MeetingSignal) -> Void,
@@ -38,22 +51,20 @@ final class ExtensionMessageHandler: Sendable {
     /// Heartbeat reconstructs full state from a single message (FR38).
     private func handleHeartbeat(_ json: [String: Any]) {
         guard let meetings = json["active_meetings"] as? [[String: Any]] else {
-            // Heartbeat with no active meetings = all browser meetings ended
-            emitSignal(platform: .browser, isActive: false)
+            emitInactiveIfGracePeriodElapsed()
             return
-        }
-
-        if meetings.isEmpty {
-            emitSignal(platform: .browser, isActive: false)
-        } else {
-            // Emit active signal for browser platform
-            // We treat all browser meetings as a single "browser" platform signal
-            emitSignal(platform: .browser, isActive: true)
         }
 
         DetectionLogger.shared.webSocket(
             "Heartbeat: \(meetings.count) active meeting(s)"
         )
+
+        if meetings.isEmpty {
+            emitInactiveIfGracePeriodElapsed()
+        } else {
+            _lastActiveMeeting.withLock { $0 = Date() }
+            emitSignal(platform: .browser, isActive: true)
+        }
     }
 
     private func handleMeetingEvent(_ json: [String: Any], isActive: Bool) {
@@ -63,7 +74,27 @@ final class ExtensionMessageHandler: Sendable {
             )
         }
 
-        emitSignal(platform: .browser, isActive: isActive)
+        if isActive {
+            _lastActiveMeeting.withLock { $0 = Date() }
+            emitSignal(platform: .browser, isActive: true)
+        } else {
+            emitInactiveIfGracePeriodElapsed()
+        }
+    }
+
+    /// Only emit inactive if no connection has reported active meetings recently.
+    private func emitInactiveIfGracePeriodElapsed() {
+        let lastActive = _lastActiveMeeting.withLock { $0 }
+        if let lastActive {
+            let elapsed = Date().timeIntervalSince(lastActive)
+            if elapsed < Self.inactiveGracePeriod {
+                DetectionLogger.shared.webSocket(
+                    "Suppressing inactive signal (last active \(Int(elapsed))s ago)"
+                )
+                return
+            }
+        }
+        emitSignal(platform: .browser, isActive: false)
     }
 
     private func emitSignal(platform: Platform, isActive: Bool) {

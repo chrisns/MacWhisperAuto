@@ -31,10 +31,14 @@ final class MeetingStateMachine {
             state = .detecting(platform: signal.platform, since: signal.timestamp)
             effects.append(.startTimer(duration: 5.0, id: .startDebounce))
 
-        // DETECTING + inactive signal -> back to idle
-        case (.detecting, false):
+        // DETECTING + inactive signal from SAME platform -> back to idle
+        case (.detecting(let platform, _), false) where signal.platform == platform:
             effects.append(.cancelTimer(id: .startDebounce))
             state = .idle
+
+        // DETECTING + inactive signal from DIFFERENT platform -> ignore
+        case (.detecting, false):
+            break
 
         // RECORDING + active signal for SAME platform -> cancel grace timer if running
         case (.recording(let platform), true) where signal.platform == platform:
@@ -48,9 +52,13 @@ final class MeetingStateMachine {
             state = .detecting(platform: signal.platform, since: signal.timestamp)
             effects.append(.startTimer(duration: 5.0, id: .startDebounce))
 
-        // RECORDING + inactive signal -> start grace period
-        case (.recording, false):
+        // RECORDING + inactive signal from SAME platform -> start grace period
+        case (.recording(let platform), false) where signal.platform == platform:
             effects.append(.startTimer(duration: 15.0, id: .stopGrace))
+
+        // RECORDING + inactive signal from DIFFERENT platform -> ignore
+        case (.recording, false):
+            break
 
         // ERROR + any signal -> stay in error (must be cleared explicitly)
         case (.error, _):

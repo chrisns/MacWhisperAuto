@@ -176,7 +176,8 @@ async function restoreMeetings() {
             platform: info.platform,
             url: tab.url,
             title: tab.title || info.title,
-            detected_at: info.detected_at
+            detected_at: info.detected_at,
+            last_confirmed: Date.now()
           });
           log(`Restored meeting: ${info.platform} in tab ${id}`);
         }
@@ -195,9 +196,10 @@ async function restoreMeetings() {
 function addMeeting(tabId, platform, url, title) {
   const existing = activeMeetings.get(tabId);
   if (existing && existing.platform === platform) {
-    // Update title/url if changed but keep detected_at
+    // Update title/url and refresh confirmation timestamp
     existing.url = url;
     existing.title = title;
+    existing.last_confirmed = Date.now();
     persistMeetings();
     return;
   }
@@ -207,7 +209,8 @@ function addMeeting(tabId, platform, url, title) {
     platform,
     url,
     title,
-    detected_at: now
+    detected_at: now,
+    last_confirmed: Date.now()
   });
 
   log(`Meeting detected: ${platform} in tab ${tabId} - ${title}`);
@@ -223,9 +226,20 @@ function addMeeting(tabId, platform, url, title) {
   });
 }
 
-function removeMeeting(tabId) {
+const MIN_MEETING_DURATION_MS = 10000; // Don't remove meetings within 10s of detection
+
+function removeMeeting(tabId, force = false) {
   const meeting = activeMeetings.get(tabId);
   if (!meeting) return;
+
+  // Grace period: don't remove meetings that were just detected (prevents flicker)
+  if (!force) {
+    const age = Date.now() - new Date(meeting.detected_at).getTime();
+    if (age < MIN_MEETING_DURATION_MS) {
+      log(`Meeting in tab ${tabId} too recent (${Math.round(age/1000)}s), keeping`);
+      return;
+    }
+  }
 
   activeMeetings.delete(tabId);
   log(`Meeting ended: ${meeting.platform} in tab ${tabId}`);
@@ -257,14 +271,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   } else if (activeMeetings.has(tabId)) {
     // Tab navigated away from a meeting URL
     log(`Tab ${tabId} navigated away from meeting`);
-    removeMeeting(tabId);
+    removeMeeting(tabId, true); // Force remove on URL change
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (activeMeetings.has(tabId)) {
     log(`Tab ${tabId} closed`);
-    removeMeeting(tabId);
+    removeMeeting(tabId, true); // Force remove on tab close
   }
 });
 
@@ -311,11 +325,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.alarms.create('keepalive', { periodInMinutes: 0.4 }); // ~24s
 
+const STALE_MEETING_MS = 30000; // Remove meetings not confirmed by content script in 30s
+
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') {
     // Restore state if service worker was suspended and lost in-memory state
     if (activeMeetings.size === 0) {
       await restoreMeetings();
+    }
+    // Expire stale meetings (content script died or stopped reporting)
+    const now = Date.now();
+    for (const [tabId, info] of [...activeMeetings]) {
+      if (info.last_confirmed && (now - info.last_confirmed) > STALE_MEETING_MS) {
+        log(`Meeting in tab ${tabId} stale (no confirmation in ${Math.round((now - info.last_confirmed)/1000)}s), removing`);
+        removeMeeting(tabId, true);
+      }
     }
     // If WebSocket died, reconnect
     if (!ws || ws.readyState !== WebSocket.OPEN) {

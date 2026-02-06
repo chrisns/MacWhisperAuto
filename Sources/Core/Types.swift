@@ -13,7 +13,7 @@ enum SignalConfidence: Sendable {
 }
 
 enum SignalSource: String, Sendable {
-    case coreAudio, iopmAssertion, cgWindowList, webSocket, nsWorkspace, axAutomation
+    case coreAudio, iopmAssertion, cgWindowList, webSocket, nsWorkspace, axAutomation, networkUDP
 }
 
 enum SideEffect: Sendable {

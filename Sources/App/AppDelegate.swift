@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up app monitoring and CGWindowList polling
         let monitor = AppMonitor()
         let scanner = CGWindowListScanner()
+        scanner.registerConsumer(teamsDetector)
         scanner.registerConsumer(zoomDetector)
         scanner.registerConsumer(slackDetector)
         scanner.registerConsumer(chimeDetector)
@@ -63,17 +64,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMonitor = monitor
         windowScanner = scanner
 
-        // Start detection if permissions allow
-        if appState.permissionsGranted {
-            coord.start()
-            monitor.start()
-            scanner.start()
-            DetectionLogger.shared.lifecycle("Detection started")
-            appState.addActivity("Detection started")
-        } else {
-            DetectionLogger.shared.lifecycle("Waiting for permissions before starting detection")
-            appState.addActivity("Waiting for permissions - click menu bar icon for setup")
-        }
+        // Always start detection - it only needs Screen Recording (for CGWindowList).
+        // Accessibility is only needed for MacWhisper automation (start/stop recording).
+        coord.start()
+        monitor.start()
+        scanner.start()
+        DetectionLogger.shared.lifecycle("Detection started")
+        appState.addActivity("Detection started")
 
         // Set up WebSocket server for browser extension
         let messageHandler = ExtensionMessageHandler(
@@ -253,6 +250,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DetectionLogger.shared.automation(
             "Side effect: start recording \(platform.displayName)", action: "startRecording"
         )
+
+        // Skip actual MacWhisper automation if accessibility isn't granted
+        guard permissionManager.checkAll()[.accessibility] == true else {
+            DetectionLogger.shared.automation(
+                "Skipping MacWhisper automation (accessibility not granted)", action: "startRecording"
+            )
+            appState.addActivity("Would record \(platform.displayName) (accessibility not granted)")
+            return
+        }
+
         let controller = macWhisperController
         let coordRef = coordinator
         let stateRef = appState
@@ -298,6 +305,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleStopRecording() {
         DetectionLogger.shared.automation("Side effect: stop recording", action: "stopRecording")
+
+        // Skip actual MacWhisper automation if accessibility isn't granted
+        guard permissionManager.checkAll()[.accessibility] == true else {
+            DetectionLogger.shared.automation(
+                "Skipping MacWhisper automation (accessibility not granted)", action: "stopRecording"
+            )
+            appState.addActivity("Would stop recording (accessibility not granted)")
+            return
+        }
+
         let controller = macWhisperController
         let stateRef = appState
 

@@ -84,6 +84,17 @@ final class CGWindowListScanner: @unchecked Sendable {
             return list.compactMap(\.value)
         }
 
+        // Periodically warn if Screen Recording permission appears missing
+        // (many windows visible but almost none have titles)
+        if windows.count > 10 {
+            let withNames = windows.filter { !$0.windowName.isEmpty }
+            if withNames.count < 5 {
+                DetectionLogger.shared.error(.detection,
+                    "Screen Recording permission may be stale — \(windows.count) windows but only \(withNames.count) have titles. Re-grant in System Settings."
+                )
+            }
+        }
+
         for consumer in consumers {
             consumer.processWindowList(windows)
         }
