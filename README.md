@@ -2,14 +2,14 @@
 
 A macOS menu bar app that automatically detects meetings across multiple platforms and triggers [MacWhisper](https://goodsnooze.gumroad.com/l/macwhisper) to record them.
 
-MacWhisper's built-in meeting detection relies on counting UDP sockets with `lsof` -- but it's unreliable and frequently misses meetings. MacWhisperAuto is a stopgap that sits in the menu bar, watches for meetings through multiple independent signal sources, and drives MacWhisper's UI via the Accessibility API to start and stop recording. It is designed to be thrown away once MacWhisper fixes their detection.
+MacWhisper's built-in meeting detection relies on counting UDP sockets with `lsof` -- but it's unreliable and frequently misses meetings. MacWhisperAuto is a stopgap that sits in the menu bar, watches for meetings through multiple independent signal sources, and controls MacWhisper recording via DYLD injection. It is designed to be thrown away once MacWhisper fixes their detection.
 
 ## Features
 
 - **Multi-platform detection**: Microsoft Teams, Zoom, Slack huddles, Amazon Chime, FaceTime, and browser-based meetings (Google Meet and others)
 - **Layered signal fusion**: Combines network, audio, power assertion, window list, and browser extension signals -- any single source is enough to detect a meeting
 - **No special permissions for primary detection**: Network UDP socket counting works with zero extra permissions for native apps
-- **Automatic recording**: Starts and stops MacWhisper recording without user intervention
+- **Automatic recording**: Starts and stops MacWhisper recording without user intervention, via injected dylib and Unix socket IPC
 - **Menu bar UI**: Shows current state (idle, detecting, recording, error) with a popover for activity history
 - **Stateless polling**: Self-heals through sleep/wake cycles; no persistent state to corrupt
 - **State machine with debounce**: 5-second start debounce prevents false positives; 15-second grace period prevents premature stop on transient signal loss
@@ -32,7 +32,7 @@ MacWhisper's built-in meeting detection relies on counting UDP sockets with `lso
 
 ### Network UDP Socket Counting (primary, no permissions)
 
-During a call, meeting apps open many UDP sockets for RTP/SRTP media streams. Idle, they have very few. MacWhisperAuto runs `lsof -a -i UDP -n -P -c <process>` every 3 seconds and counts the sockets. If the count exceeds a threshold (e.g. 3 for Teams, 2 for Zoom), a meeting is active. This requires no Accessibility or Screen Recording permissions.
+During a call, meeting apps open many UDP sockets for RTP/SRTP media streams. Idle, they have very few. MacWhisperAuto runs `lsof -a -i UDP -n -P -c <process>` every 3 seconds and counts the sockets. If the count exceeds a threshold (e.g. 3 for Teams, 2 for Zoom), a meeting is active. This requires no special permissions.
 
 ### CoreAudio Virtual Device (Teams-specific, event-driven)
 
@@ -55,6 +55,20 @@ A single `CGWindowListCopyWindowInfo` call per 3-second cycle (completes in unde
 ### Browser Extension (web meetings via WebSocket)
 
 A Chromium MV3 extension injects content scripts into meeting pages. The content scripts inspect the DOM for platform-specific indicators (mute buttons, call controls, participant lists) and report to the service worker, which maintains a WebSocket connection to `ws://127.0.0.1:8765`. The host app receives heartbeats every 20 seconds with the full list of active meetings. Supported web platforms: Google Meet, Teams Web, Zoom Web, Slack Web, Chime Web.
+
+## How Recording Works (DYLD Injection)
+
+MacWhisper has no AppleScript dictionary, no CLI, and no usable URL scheme. MacWhisperAuto uses DYLD injection to control it from inside its own process:
+
+1. **Prepare**: On first launch, copies MacWhisper.app to `~/Library/Application Support/MacWhisperAuto/Injectable/`, re-signs it ad-hoc with `com.apple.security.cs.allow-dyld-environment-variables`, and compiles an Objective-C dylib from embedded source
+2. **Launch**: Runs the re-signed copy with `DYLD_INSERT_LIBRARIES` pointing to the dylib
+3. **Control**: The dylib creates a Unix socket at `/tmp/macwhisper_control.sock` and accepts commands:
+   - `ax_record Record <Platform>` -- presses per-app recording buttons via in-process AX (no TCC permission needed)
+   - `ax_status` -- scans the AX tree for "Active Recordings" to check recording state
+   - `stop` -- calls `stopRecordingMeeting` on MacWhisper's `StatusBarItemManager` via ObjC runtime
+   - `dismiss` -- breaks modal dialogs (e.g. "Move to Applications") via `[NSApp abortModal]`
+
+The dylib also auto-dismisses MacWhisper's broken meeting detection dialogs before pressing recording buttons, and handles the case where a false-positive recording is already active (stops it first).
 
 ## Architecture
 
@@ -85,13 +99,13 @@ Sources/
     CGWindowListScanner.swift # Shared window list poller, distributes to consumers
     AppMonitor.swift        # NSWorkspace launch/terminate notifications
   Automation/
-    MacWhisperController.swift # Drives MacWhisper via AX API
-    AccessibilityHelper.swift  # AX tree traversal utilities
+    InjectedMacWhisperController.swift # Controls MacWhisper via DYLD injection + Unix socket IPC
+    AXError.swift              # Error types for automation operations
   Networking/
     WebSocketServer.swift   # Network.framework WebSocket on 127.0.0.1:8765
     ExtensionMessageHandler.swift # Parses extension JSON into MeetingSignals
   Permissions/
-    PermissionManager.swift # Checks and prompts for Accessibility + Screen Recording
+    PermissionManager.swift # Checks Screen Recording permission
   Logging/
     DetectionLogger.swift   # os_log + JSONL file logger (~10MB rotation)
   UI/
@@ -145,13 +159,7 @@ The extension is only needed for browser-based meetings (primarily Google Meet).
 
 ## Permissions
 
-MacWhisperAuto needs two macOS permissions. On first launch, an onboarding screen guides you through granting them.
-
-### Accessibility (required)
-
-Used to control MacWhisper's recording UI -- pressing the "Record [Platform]" button to start and "Stop Recording" in the menu bar extras to stop. Without this, meeting detection still works but recording cannot be automated.
-
-Grant in **System Settings > Privacy & Security > Accessibility**.
+MacWhisperAuto needs one macOS permission. On first launch, an onboarding screen guides you through granting it.
 
 ### Screen Recording (recommended)
 

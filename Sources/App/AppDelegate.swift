@@ -64,8 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMonitor = monitor
         windowScanner = scanner
 
-        // Always start detection - it only needs Screen Recording (for CGWindowList).
-        // Accessibility is only needed for MacWhisper automation (start/stop recording).
+        // Always start detection - Screen Recording improves CGWindowList-based detection.
+        // Recording automation uses DYLD injection (no special permissions needed).
         coord.start()
         monitor.start()
         scanner.start()
@@ -149,20 +149,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Permission Checking
 
     private func checkPermissions() {
-        let perms = permissionManager.checkAll()
-        let axGranted = perms[.accessibility] ?? false
-        let srGranted = perms[.screenRecording] ?? false
-        appState.permissionsGranted = axGranted && srGranted
+        let srGranted = permissionManager.isScreenRecordingGranted()
+        appState.permissionsGranted = srGranted
 
-        if axGranted {
-            DetectionLogger.shared.permissions("Accessibility: granted")
-        } else {
-            DetectionLogger.shared.permissions("Accessibility: NOT granted")
-        }
         if srGranted {
             DetectionLogger.shared.permissions("Screen Recording: granted")
         } else {
-            DetectionLogger.shared.permissions("Screen Recording: NOT granted")
+            DetectionLogger.shared.permissions("Screen Recording: NOT granted (window-title detection disabled)")
         }
     }
 
@@ -195,21 +188,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         checkPermissions()
 
         if wasGranted && !appState.permissionsGranted {
-            // Permission was revoked
-            let perms = permissionManager.checkAll()
-            let axGranted = perms[.accessibility] ?? false
-            let srGranted = perms[.screenRecording] ?? false
-            if !axGranted {
-                coordinator?.reportError(.permissionDenied(.accessibility))
-                appState.addActivity("Accessibility permission revoked")
-            }
-            if !srGranted {
-                coordinator?.reportError(.permissionDenied(.screenRecording))
-                appState.addActivity("Screen Recording permission revoked")
-            }
+            coordinator?.reportError(.permissionDenied(.screenRecording))
+            appState.addActivity("Screen Recording permission revoked")
             coordinator?.stop()
         } else if !wasGranted && appState.permissionsGranted {
-            // Permission was re-granted
             coordinator?.clearError()
             coordinator?.start()
             appMonitor?.start()
@@ -255,7 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "Side effect: start recording \(platform.displayName)", action: "startRecording"
         )
 
-        // Injection approach: no accessibility permission needed.
+        // Injection approach handles everything internally.
         // The controller handles prepare + launch + socket command internally.
         let controller = macWhisperController
         let coordRef = coordinator
@@ -287,8 +269,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 innerCoord?.reportError(.axElementNotFound(desc))
                             case .timeout:
                                 innerCoord?.reportError(.macWhisperUnresponsive)
-                            case .noPermission:
-                                innerCoord?.reportError(.permissionDenied(.accessibility))
                             case .actionFailed:
                                 innerCoord?.reportError(.macWhisperUnresponsive)
                             }
@@ -302,7 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleStopRecording() {
         DetectionLogger.shared.automation("Side effect: stop recording", action: "stopRecording")
 
-        // Injection approach: no accessibility permission needed.
+        // Injection approach handles everything internally.
         let controller = macWhisperController
         let stateRef = appState
 

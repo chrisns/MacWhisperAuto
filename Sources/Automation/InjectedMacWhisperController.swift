@@ -20,27 +20,22 @@ enum InjectionError: Error, CustomStringConvertible, Sendable {
 
 /// Controls MacWhisper recording via DYLD injection and Unix socket IPC.
 ///
-/// Instead of the external Accessibility API, this approach:
+/// Controls MacWhisper via DYLD injection:
 /// 1. Creates a re-signed copy of MacWhisper that accepts DYLD injection
 /// 2. Injects a dylib that exposes a Unix socket control interface
 /// 3. Sends commands via the socket to control recording
 ///
-/// The injected dylib provides two recording mechanisms:
-/// - **Start**: Internal AX button press (`ax_record Record Teams`) - bypasses
-///   MacWhisper's broken meeting detection dialogs by pressing per-app buttons directly
+/// The injected dylib provides:
+/// - **Start**: In-process AX button press (`ax_record Record Teams`) - presses
+///   per-app buttons directly, auto-dismisses detection dialogs
 /// - **Stop**: ObjC method invocation (`stopRecordingMeeting`) on `StatusBarItemManager`
 ///   found via SwiftUI delegate chain traversal
-/// - **Status**: Internal AX tree scan for "Active Recordings" heading
+/// - **Status**: In-process AX tree scan for "Active Recordings" heading
 ///
-/// Advantages over external Accessibility API:
-/// - No Accessibility permission needed (in-process AX is unrestricted)
-/// - Direct button press bypasses detection confirmation dialogs
-/// - No window focus manipulation
-///
-/// Disadvantages:
+/// Trade-offs:
+/// - No special permissions needed (in-process AX is unrestricted)
 /// - Requires running a modified (ad-hoc signed) copy of MacWhisper
 /// - Must re-prepare after MacWhisper updates
-/// - Two copies of MacWhisper on disk
 final class InjectedMacWhisperController: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.macwhisperauto.injection")
     private let socketPath = "/tmp/macwhisper_control.sock"
@@ -461,9 +456,11 @@ final class InjectedMacWhisperController: @unchecked Sendable {
         }
     }
 
-    // MARK: - Embedded Resources
+}
 
-    // swiftlint:disable line_length
+// MARK: - Embedded Resources
+
+extension InjectedMacWhisperController {
 
     /// The Objective-C dylib source that gets injected into MacWhisper.
     /// Creates a Unix socket at /tmp/macwhisper_control.sock and exposes:
@@ -835,6 +832,4 @@ final class InjectedMacWhisperController: @unchecked Sendable {
     </dict>
     </plist>
     """
-
-    // swiftlint:enable line_length
 }
