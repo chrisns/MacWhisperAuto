@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     private var statusBarController: StatusBarController?
     private var coordinator: DetectionCoordinator?
-    private let macWhisperController = MacWhisperController()
+    private let macWhisperController = InjectedMacWhisperController()
     private let permissionManager = PermissionManager()
     private var appMonitor: AppMonitor?
     private var windowScanner: CGWindowListScanner?
@@ -129,6 +129,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Start periodic permission monitoring (Story 2.2)
         startPermissionPolling()
+
+        // Prepare injection environment in background (compile dylib, copy+resign MacWhisper)
+        // so it's ready when a meeting is first detected.
+        macWhisperController.prepareInBackground()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -251,15 +255,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "Side effect: start recording \(platform.displayName)", action: "startRecording"
         )
 
-        // Skip actual MacWhisper automation if accessibility isn't granted
-        guard permissionManager.checkAll()[.accessibility] == true else {
-            DetectionLogger.shared.automation(
-                "Skipping MacWhisper automation (accessibility not granted)", action: "startRecording"
-            )
-            appState.addActivity("Would record \(platform.displayName) (accessibility not granted)")
-            return
-        }
-
+        // Injection approach: no accessibility permission needed.
+        // The controller handles prepare + launch + socket command internally.
         let controller = macWhisperController
         let coordRef = coordinator
         let stateRef = appState
@@ -268,10 +265,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 guard launched else {
                     coordRef?.reportError(.macWhisperNotRunning)
-                    stateRef.addActivity("Failed to launch MacWhisper", platform: platform)
+                    stateRef.addActivity("Failed to launch injectable MacWhisper", platform: platform)
                     return
                 }
-                // Capture fresh let-bindings for the inner closure
                 let innerCoord = coordRef
                 let innerState = stateRef
                 controller.startRecording(for: platform) { result in
@@ -306,15 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleStopRecording() {
         DetectionLogger.shared.automation("Side effect: stop recording", action: "stopRecording")
 
-        // Skip actual MacWhisper automation if accessibility isn't granted
-        guard permissionManager.checkAll()[.accessibility] == true else {
-            DetectionLogger.shared.automation(
-                "Skipping MacWhisper automation (accessibility not granted)", action: "stopRecording"
-            )
-            appState.addActivity("Would stop recording (accessibility not granted)")
-            return
-        }
-
+        // Injection approach: no accessibility permission needed.
         let controller = macWhisperController
         let stateRef = appState
 
@@ -387,8 +375,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func handleAppTerminated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               app.bundleIdentifier == "com.goodsnooze.MacWhisper" else { return }
-        DetectionLogger.shared.lifecycle("MacWhisper terminated")
-        appState.addActivity("MacWhisper quit")
+        // Distinguish between real and injectable MacWhisper
+        let isInjectable = app.bundleURL?.path.contains("Injectable") == true
+        DetectionLogger.shared.lifecycle(
+            "\(isInjectable ? "Injectable " : "")MacWhisper terminated"
+        )
+        appState.addActivity("\(isInjectable ? "Injectable " : "")MacWhisper quit")
 
         // If we were recording, MacWhisper quitting is an error condition
         if appState.isRecording {
