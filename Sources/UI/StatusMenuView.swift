@@ -4,6 +4,8 @@ struct StatusMenuView: View {
     let appState: AppState
     var onForceQuitRelaunch: (() -> Void)?
     var onRetry: (() -> Void)?
+    var onManualRecord: ((String) -> Void)?
+    var onStopRecording: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -20,8 +22,14 @@ struct StatusMenuView: View {
                 Divider()
             }
 
-            if case .recording(let platform) = appState.meetingState {
-                recordingInfo(platform: platform)
+            if appState.isRecording {
+                if case .recording(let platform) = appState.meetingState {
+                    recordingInfo(platform: platform)
+                }
+                stopButton
+                Divider()
+            } else {
+                recordButtons
                 Divider()
             }
 
@@ -32,7 +40,7 @@ struct StatusMenuView: View {
             footerControls
         }
         .padding(16)
-        .frame(width: 320, height: 380)
+        .frame(width: 320, height: 420)
     }
 
     // MARK: - Components
@@ -93,6 +101,47 @@ struct StatusMenuView: View {
         .padding(8)
         .background(.red.opacity(0.1))
         .cornerRadius(8)
+    }
+
+    private static let manualTargets: [(label: String, button: String)] = [
+        ("Comet", "Record Comet"),
+        ("Chrome", "Record Chrome"),
+        ("Teams", "Record Teams"),
+        ("Zoom", "Record Zoom"),
+        ("Slack", "Record Slack"),
+        ("System", "Record All System Audio"),
+    ]
+
+    private var recordButtons: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Record")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: [
+                GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())
+            ], spacing: 6) {
+                ForEach(Self.manualTargets, id: \.button) { target in
+                    Button(target.label) {
+                        onManualRecord?(target.button)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .font(.caption)
+                }
+            }
+        }
+    }
+
+    private var stopButton: some View {
+        Button {
+            onStopRecording?()
+        } label: {
+            Label("Stop Recording", systemImage: "stop.circle.fill")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.red)
+        .controlSize(.regular)
     }
 
     private var activityLog: some View {

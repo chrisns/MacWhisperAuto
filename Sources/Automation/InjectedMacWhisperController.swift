@@ -83,6 +83,17 @@ final class InjectedMacWhisperController: @unchecked Sendable {
         }
     }
 
+    /// Manual recording by raw button name (e.g. "Record Chrome", "Record All System Audio").
+    func manualRecord(
+        buttonName: String,
+        completion: @escaping @Sendable (Result<Void, AXError>) -> Void
+    ) {
+        queue.async { [self] in
+            let result = performManualRecord(buttonName: buttonName)
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     /// Stop recording via socket command.
     func stopRecording(completion: @escaping @Sendable (Result<Void, AXError>) -> Void) {
         queue.async { [self] in
@@ -366,6 +377,34 @@ final class InjectedMacWhisperController: @unchecked Sendable {
         return .failure(
             .actionFailed(element: buttonName, action: "ax_record", code: -1)
         )
+    }
+
+    private func performManualRecord(buttonName: String) -> Result<Void, AXError> {
+        _ = sendSocketCommand("dismiss")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        if let status = sendSocketCommand("ax_status"), status == "OK:recording" {
+            _ = sendSocketCommand("stop")
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+
+        guard let response = sendSocketCommand("ax_record \(buttonName)") else {
+            return .failure(.timeout)
+        }
+        if response == "OK:pressed" {
+            Thread.sleep(forTimeInterval: 2.0)
+            if let status = sendSocketCommand("ax_status"), status == "OK:recording" {
+                DetectionLogger.shared.automation(
+                    "Manual recording started: \(buttonName)", action: "manualRecord"
+                )
+                return .success(())
+            }
+            return .failure(.actionFailed(element: buttonName, action: "ax_record", code: -2))
+        }
+        if response == "ERR:not_found" {
+            return .failure(.elementNotFound(description: "Button '\(buttonName)' not found"))
+        }
+        return .failure(.actionFailed(element: buttonName, action: "ax_record", code: -1))
     }
 
     private func performStopRecording() -> Result<Void, AXError> {

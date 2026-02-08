@@ -119,6 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sbc.onRetry = { [weak self] in
             self?.handleRetry()
         }
+        sbc.onManualRecord = { [weak self] buttonName in
+            self?.handleManualRecord(buttonName: buttonName)
+        }
+        sbc.onStopRecording = { [weak self] in
+            self?.handleStopRecording()
+        }
         statusBarController = sbc
 
         // System notifications for sleep/wake and app termination
@@ -279,6 +285,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func handleManualRecord(buttonName: String) {
+        DetectionLogger.shared.automation(
+            "Manual record: \(buttonName)", action: "manualRecord"
+        )
+        appState.addActivity("Manual record: \(buttonName)")
+
+        let controller = macWhisperController
+        let stateRef = appState
+        controller.launchIfNeeded { launched in
+            Task { @MainActor in
+                guard launched else {
+                    stateRef.addActivity("Failed to launch injectable MacWhisper")
+                    return
+                }
+                controller.manualRecord(buttonName: buttonName) { result in
+                    Task { @MainActor in
+                        switch result {
+                        case .success:
+                            let platform = Self.platformForButton(buttonName)
+                            stateRef.updateState(.recording(platform: platform))
+                            stateRef.addActivity("Recording started: \(buttonName)")
+                        case .failure(let error):
+                            stateRef.addActivity("Recording failed: \(error)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static func platformForButton(_ buttonName: String) -> Platform {
+        switch buttonName {
+        case "Record Teams": .teams
+        case "Record Zoom": .zoom
+        case "Record Slack": .slack
+        case "Record Comet", "Record Chrome": .browser
+        case "Record Chime": .chime
+        default: .browser
+        }
+    }
+
     private func handleStopRecording() {
         DetectionLogger.shared.automation("Side effect: stop recording", action: "stopRecording")
 
@@ -290,6 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 switch result {
                 case .success:
+                    stateRef.updateState(.idle)
                     stateRef.addActivity("Recording stopped")
                 case .failure(let error):
                     DetectionLogger.shared.error(.automation, "Stop recording failed: \(error)")

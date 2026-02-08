@@ -9,9 +9,11 @@ final class StatusBarController {
     private let permissionManager: PermissionManager
     private var iconTimer: Timer?
 
-    // Error recovery actions (set by AppDelegate)
+    // Actions (set by AppDelegate)
     var onForceQuitRelaunch: (() -> Void)?
     var onRetry: (() -> Void)?
+    var onManualRecord: ((String) -> Void)?
+    var onStopRecording: (() -> Void)?
 
     init(appState: AppState, permissionManager: PermissionManager) {
         self.appState = appState
@@ -51,7 +53,9 @@ final class StatusBarController {
                 rootView: AnyView(StatusMenuView(
                     appState: appState,
                     onForceQuitRelaunch: onForceQuitRelaunch,
-                    onRetry: onRetry
+                    onRetry: onRetry,
+                    onManualRecord: onManualRecord,
+                    onStopRecording: onStopRecording
                 ))
             )
         }
