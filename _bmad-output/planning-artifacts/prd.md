@@ -283,8 +283,8 @@ MacWhisperAuto is a single-user macOS menu bar utility. No cross-platform suppor
 ### MacWhisper Automation
 
 - **FR14:** Start a MacWhisper recording for a specific app by pressing the corresponding "Record [AppName]" button via accessibility automation
-- **FR15:** Stop a MacWhisper recording by pressing "Stop Recording" in the extras menu bar via accessibility automation
-- **FR16:** Check whether MacWhisper is currently recording by inspecting the extras menu bar for a "Recording ..." menu item
+- **FR15:** Stop a MacWhisper recording by triggering the "Finish Recording" dialog from the active recording in MacWhisper's sidebar via accessibility automation
+- **FR16:** Check whether MacWhisper is currently recording by inspecting the sidebar for an active recording row
 - **FR17:** Launch MacWhisper automatically if not running when a meeting is detected
 - **FR18:** Detect when MacWhisper is unresponsive (AX automation timeout) and alert the user
 - **FR19:** Force-quit and relaunch MacWhisper at the user's request when unresponsive

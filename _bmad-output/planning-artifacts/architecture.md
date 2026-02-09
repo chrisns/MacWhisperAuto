@@ -527,8 +527,9 @@ MacWhisperAuto/
 │   │   │   └── CGWindowListScanner.swift       # Shared CGWindowList polling infrastructure (FR3-FR6, FR8)
 │   │   │
 │   │   ├── Automation/
-│   │   │   ├── MacWhisperController.swift      # Start/stop/check recording, launch, force-quit (FR14-FR21)
-│   │   │   └── AccessibilityHelper.swift       # Low-level AX element query, action, timeout utilities
+│   │   │   ├── MacWhisperController.swift      # Controls MacWhisper via cross-process Accessibility API (FR14-FR21)
+│   │   │   ├── AccessibilityHelper.swift       # Low-level AX element query, action, timeout utilities
+│   │   │   └── AXError.swift                   # Error types for automation operations
 │   │   │
 │   │   ├── Networking/
 │   │   │   ├── WebSocketServer.swift           # Network.framework NWListener + NWProtocolWebSocket (FR37)

@@ -39,8 +39,8 @@ This document provides the complete epic and story breakdown for MacWhisperAuto,
 **MacWhisper Automation (FR14-FR21)**
 
 - FR14: Start a MacWhisper recording for a specific app by pressing the corresponding "Record [AppName]" button via accessibility automation
-- FR15: Stop a MacWhisper recording by pressing "Stop Recording" in the extras menu bar via accessibility automation
-- FR16: Check whether MacWhisper is currently recording by inspecting the extras menu bar for a "Recording ..." menu item
+- FR15: Stop a MacWhisper recording by triggering the "Finish Recording" dialog from the active recording in MacWhisper's sidebar via accessibility automation
+- FR16: Check whether MacWhisper is currently recording by inspecting the sidebar for an active recording row
 - FR17: Launch MacWhisper automatically if not running when a meeting is detected
 - FR18: Detect when MacWhisper is unresponsive (AX automation timeout) and alert the user
 - FR19: Force-quit and relaunch MacWhisper at the user's request when unresponsive
@@ -393,11 +393,11 @@ So that I never have to open MacWhisper or click any buttons myself.
 
 **Given** the state machine emits a `.stopRecording` side effect
 **When** MacWhisperController handles it
-**Then** it finds "Stop Recording" in MacWhisper's extras menu bar (kAXExtrasMenuBarAttribute) via AX and presses it (FR15)
+**Then** it finds the active recording in MacWhisper's sidebar, triggers the "Finish Recording" dialog, and presses the "Finish" button (FR15)
 
 **Given** MacWhisperController needs to check recording status
 **When** checkRecordingStatus() is called
-**Then** it inspects the extras menu bar for a "Recording ..." menu item and returns the current state (FR16)
+**Then** it inspects the sidebar for an active recording row under "Active Recordings" and returns the current state (FR16)
 
 **Given** a meeting is detected and MacWhisper is not running
 **When** the automation is triggered
@@ -551,7 +551,7 @@ So that I'm informed of problems and the app recovers automatically when possibl
 **When** the expected AX element is not found
 **Then** an `.error(.axElementNotFound)` state is set and the menu bar shows the error icon with a description of what's missing (FR21)
 
-**Given** MacWhisperController queries for "Stop Recording" in the extras menu bar
+**Given** MacWhisperController queries for the active recording in the sidebar or the "Finish" button
 **When** the expected AX element structure has changed
 **Then** an `.error(.axElementNotFound)` state is set and logged with the element description for diagnostics (FR21)
 
