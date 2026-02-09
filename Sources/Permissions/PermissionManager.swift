@@ -1,9 +1,15 @@
 import AppKit
+import ApplicationServices
 
 @MainActor
 final class PermissionManager {
 
     // MARK: - Checks
+
+    /// Check if Accessibility permission is granted (non-prompting).
+    func isAccessibilityGranted() -> Bool {
+        AXIsProcessTrusted()
+    }
 
     /// Check if Screen Recording permission is granted.
     /// Tests by reading window names from CGWindowListCopyWindowInfo —
@@ -26,14 +32,28 @@ final class PermissionManager {
         return windowList.isEmpty
     }
 
-    /// Return status for every permission the app checks.
+    /// Return status for every permission the app requires.
     func checkAll() -> [Permission: Bool] {
         [
+            .accessibility: isAccessibilityGranted(),
             .screenRecording: isScreenRecordingGranted()
         ]
     }
 
     // MARK: - Actions
+
+    /// Show the system prompt asking the user to grant Accessibility.
+    func promptAccessibility() {
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        AXIsProcessTrustedWithOptions(options)
+    }
+
+    /// Open System Settings > Privacy & Security > Accessibility.
+    func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     /// Open System Settings > Privacy & Security > Screen Recording.
     func openScreenRecordingSettings() {

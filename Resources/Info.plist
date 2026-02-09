@@ -22,5 +22,7 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>MacWhisperAuto detects active meetings by reading window titles.</string>
 </dict>
 </plist>

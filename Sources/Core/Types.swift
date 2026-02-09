@@ -66,7 +66,7 @@ enum ErrorKind: Equatable, Sendable {
 }
 
 enum Permission: String, Sendable {
-    case screenRecording
+    case accessibility, screenRecording
 }
 
 extension ErrorKind {

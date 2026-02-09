@@ -5,6 +5,7 @@ enum AXError: Error, CustomStringConvertible, Sendable {
     case elementNotFound(description: String)
     case actionFailed(element: String, action: String, code: Int32)
     case timeout
+    case noPermission
 
     var description: String {
         switch self {
@@ -13,6 +14,7 @@ enum AXError: Error, CustomStringConvertible, Sendable {
         case .actionFailed(let el, let action, let code):
             "Action '\(action)' failed on '\(el)' (code: \(code))"
         case .timeout: "AX operation timed out"
+        case .noPermission: "Accessibility permission not granted"
         }
     }
 }

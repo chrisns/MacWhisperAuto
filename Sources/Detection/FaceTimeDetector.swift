@@ -10,7 +10,7 @@ import os
 ///
 /// Both conditions must be true for positive detection.
 /// FaceTime is not available as a per-app recording target in MacWhisper,
-/// so it uses "All System Audio" fallback (handled by InjectedMacWhisperController).
+/// so it uses "All System Audio" fallback (handled by MacWhisperController).
 final class FaceTimeDetector: MeetingDetector, WindowListConsumer, @unchecked Sendable {
     private let onSignal: @Sendable (MeetingSignal) -> Void
     private let pollQueue = DispatchQueue(label: "com.macwhisperauto.facetime.poll")

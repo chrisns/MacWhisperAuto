@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     private var statusBarController: StatusBarController?
     private var coordinator: DetectionCoordinator?
-    private let macWhisperController = InjectedMacWhisperController()
+    private let macWhisperController = MacWhisperController()
     private let permissionManager = PermissionManager()
     private var appMonitor: AppMonitor?
     private var windowScanner: CGWindowListScanner?
@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowScanner = scanner
 
         // Always start detection - Screen Recording improves CGWindowList-based detection.
-        // Recording automation uses DYLD injection (no special permissions needed).
+        // Recording automation uses cross-process Accessibility API.
         coord.start()
         monitor.start()
         scanner.start()
@@ -136,9 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Start periodic permission monitoring (Story 2.2)
         startPermissionPolling()
 
-        // Prepare injection environment in background (compile dylib, copy+resign MacWhisper)
-        // so it's ready when a meeting is first detected.
-        macWhisperController.prepareInBackground()
+        // Launch MacWhisper in background so it's ready when a meeting is detected.
+        macWhisperController.launchInBackground()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -155,13 +154,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Permission Checking
 
     private func checkPermissions() {
+        let axGranted = permissionManager.isAccessibilityGranted()
         let srGranted = permissionManager.isScreenRecordingGranted()
-        appState.permissionsGranted = srGranted
+        appState.permissionsGranted = axGranted && srGranted
 
-        if srGranted {
-            DetectionLogger.shared.permissions("Screen Recording: granted")
-        } else {
-            DetectionLogger.shared.permissions("Screen Recording: NOT granted (window-title detection disabled)")
+        DetectionLogger.shared.permissions(
+            "Accessibility: \(axGranted ? "granted" : "NOT granted (recording automation disabled)")"
+        )
+        DetectionLogger.shared.permissions(
+            "Screen Recording: \(srGranted ? "granted" : "NOT granted (window-title detection disabled)")"
+        )
+
+        // Prompt for Accessibility if not yet granted
+        if !axGranted {
+            permissionManager.promptAccessibility()
         }
     }
 
@@ -194,8 +200,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         checkPermissions()
 
         if wasGranted && !appState.permissionsGranted {
-            coordinator?.reportError(.permissionDenied(.screenRecording))
-            appState.addActivity("Screen Recording permission revoked")
+            let axGranted = permissionManager.isAccessibilityGranted()
+            let revokedPermission: Permission = axGranted ? .screenRecording : .accessibility
+            coordinator?.reportError(.permissionDenied(revokedPermission))
+            appState.addActivity("\(revokedPermission == .accessibility ? "Accessibility" : "Screen Recording") permission revoked")
             coordinator?.stop()
         } else if !wasGranted && appState.permissionsGranted {
             coordinator?.clearError()
@@ -243,8 +251,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "Side effect: start recording \(platform.displayName)", action: "startRecording"
         )
 
-        // Injection approach handles everything internally.
-        // The controller handles prepare + launch + socket command internally.
+        // Cross-process AX requires Accessibility permission
+        guard permissionManager.isAccessibilityGranted() else {
+            DetectionLogger.shared.automation(
+                "Skipping MacWhisper automation (accessibility not granted)", action: "startRecording"
+            )
+            appState.addActivity("Would record \(platform.displayName) (accessibility not granted)")
+            return
+        }
+
         let controller = macWhisperController
         let coordRef = coordinator
         let stateRef = appState
@@ -253,7 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 guard launched else {
                     coordRef?.reportError(.macWhisperNotRunning)
-                    stateRef.addActivity("Failed to launch injectable MacWhisper", platform: platform)
+                    stateRef.addActivity("Failed to launch MacWhisper", platform: platform)
                     return
                 }
                 let innerCoord = coordRef
@@ -277,6 +292,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 innerCoord?.reportError(.macWhisperUnresponsive)
                             case .actionFailed:
                                 innerCoord?.reportError(.macWhisperUnresponsive)
+                            case .noPermission:
+                                innerCoord?.reportError(.permissionDenied(.accessibility))
                             }
                         }
                     }
@@ -296,7 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.launchIfNeeded { launched in
             Task { @MainActor in
                 guard launched else {
-                    stateRef.addActivity("Failed to launch injectable MacWhisper")
+                    stateRef.addActivity("Failed to launch MacWhisper")
                     return
                 }
                 controller.manualRecord(buttonName: buttonName) { result in
@@ -329,7 +346,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleStopRecording() {
         DetectionLogger.shared.automation("Side effect: stop recording", action: "stopRecording")
 
-        // Injection approach handles everything internally.
+        // Cross-process AX requires Accessibility permission
+        guard permissionManager.isAccessibilityGranted() else {
+            DetectionLogger.shared.automation(
+                "Skipping MacWhisper automation (accessibility not granted)", action: "stopRecording"
+            )
+            appState.addActivity("Would stop recording (accessibility not granted)")
+            return
+        }
+
         let controller = macWhisperController
         let stateRef = appState
 
@@ -403,12 +428,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func handleAppTerminated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               app.bundleIdentifier == "com.goodsnooze.MacWhisper" else { return }
-        // Distinguish between real and injectable MacWhisper
-        let isInjectable = app.bundleURL?.path.contains("Injectable") == true
-        DetectionLogger.shared.lifecycle(
-            "\(isInjectable ? "Injectable " : "")MacWhisper terminated"
-        )
-        appState.addActivity("\(isInjectable ? "Injectable " : "")MacWhisper quit")
+        DetectionLogger.shared.lifecycle("MacWhisper terminated")
+        appState.addActivity("MacWhisper quit")
 
         // If we were recording, MacWhisper quitting is an error condition
         if appState.isRecording {
