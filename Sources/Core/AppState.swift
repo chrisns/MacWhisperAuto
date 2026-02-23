@@ -10,6 +10,21 @@ final class AppState {
     var permissionsGranted: Bool = false
     var extensionConnected: Bool = false
 
+    // Version tracking
+    let appVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+    var extensionVersion: String?
+    var latestReleaseVersion: String?
+
+    var appUpdateAvailable: Bool {
+        guard let latest = latestReleaseVersion else { return false }
+        return latest.compare(appVersion, options: .numeric) == .orderedDescending
+    }
+
+    var extensionVersionMismatch: Bool {
+        guard let extVer = extensionVersion else { return false }
+        return extVer != appVersion
+    }
+
     var showOnboarding: Bool { !permissionsGranted }
 
     var isRecording: Bool {

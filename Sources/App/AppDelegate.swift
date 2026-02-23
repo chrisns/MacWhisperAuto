@@ -75,40 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.addActivity("Detection started")
 
         // Set up WebSocket server for browser extension
-        let messageHandler = ExtensionMessageHandler(
-            onSignal: { [weak coord] signal in
-                coord?.handleSignal(signal)
-            },
-            onConnectionStateChanged: { [weak appState] connected in
-                Task { @MainActor in
-                    appState?.extensionConnected = connected
-                }
-            }
-        )
-        extensionMessageHandler = messageHandler
-
-        let wsServer = WebSocketServer()
-        wsServer.onMessage = { [weak messageHandler] data in
-            messageHandler?.handleMessage(data)
-        }
-        wsServer.onClientConnected = { [weak messageHandler] in
-            messageHandler?.onConnectionStateChanged(true)
-        }
-        wsServer.onClientDisconnected = { [weak wsServer, weak appState] in
-            let stillConnected = wsServer?.hasConnections ?? false
-            Task { @MainActor in
-                appState?.extensionConnected = stillConnected
-            }
-        }
-        wsServer.onError = { [weak appState] error in
-            Task { @MainActor in
-                // WebSocket failure is non-fatal - native detection still works
-                DetectionLogger.shared.error(.webSocket, "WebSocket error: \(error)")
-                appState?.addActivity("Browser extension unavailable (WebSocket error)")
-            }
-        }
-        webSocketServer = wsServer
-        wsServer.start()
+        setupWebSocket(coordinator: coord)
 
         // Set up menu bar UI (pass permissionManager for onboarding)
         let sbc = StatusBarController(
@@ -140,6 +107,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Launch MacWhisper in background so it's ready when a meeting is detected.
         macWhisperController.launchInBackground()
+
+        // Check for app updates in the background
+        checkForAppUpdate()
+    }
+
+    private func setupWebSocket(coordinator coord: DetectionCoordinator) {
+        let messageHandler = ExtensionMessageHandler(
+            onSignal: { [weak coord] signal in
+                coord?.handleSignal(signal)
+            },
+            onConnectionStateChanged: { [weak appState] connected in
+                Task { @MainActor in
+                    appState?.extensionConnected = connected
+                }
+            },
+            onExtensionVersionReceived: { [weak appState] version in
+                Task { @MainActor in
+                    appState?.extensionVersion = version
+                }
+            }
+        )
+        extensionMessageHandler = messageHandler
+
+        let wsServer = WebSocketServer()
+        wsServer.onMessage = { [weak messageHandler] data in
+            messageHandler?.handleMessage(data)
+        }
+        wsServer.onClientConnected = { [weak messageHandler] in
+            messageHandler?.onConnectionStateChanged(true)
+        }
+        wsServer.onClientDisconnected = { [weak wsServer, weak appState] in
+            let stillConnected = wsServer?.hasConnections ?? false
+            Task { @MainActor in
+                appState?.extensionConnected = stillConnected
+            }
+        }
+        wsServer.onError = { [weak appState] error in
+            Task { @MainActor in
+                DetectionLogger.shared.error(.webSocket, "WebSocket error: \(error)")
+                appState?.addActivity("Browser extension unavailable (WebSocket error)")
+            }
+        }
+        webSocketServer = wsServer
+        wsServer.start()
+    }
+
+    private func checkForAppUpdate() {
+        Task {
+            if let latest = await VersionChecker.fetchLatestVersion() {
+                await MainActor.run {
+                    appState.latestReleaseVersion = latest
+                    if appState.appUpdateAvailable {
+                        DetectionLogger.shared.lifecycle("Update available: v\(latest) (current: v\(appState.appVersion))")
+                        appState.addActivity("Update available: v\(latest)")
+                    }
+                }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

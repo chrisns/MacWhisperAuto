@@ -185,7 +185,34 @@ struct StatusMenuView: View {
                 .cornerRadius(6)
             }
 
+            if appState.extensionVersionMismatch {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Extension v\(appState.extensionVersion ?? "?") does not match app v\(appState.appVersion)")
+                        .font(.caption2)
+                }
+                .padding(8)
+                .background(.orange.opacity(0.08))
+                .cornerRadius(6)
+            }
+
+            if appState.appUpdateAvailable {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundStyle(.blue)
+                    Text("v\(appState.latestReleaseVersion ?? "") available (you have v\(appState.appVersion))")
+                        .font(.caption2)
+                }
+                .padding(8)
+                .background(.blue.opacity(0.08))
+                .cornerRadius(6)
+            }
+
             HStack {
+                Text("v\(appState.appVersion)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
                 Spacer()
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)

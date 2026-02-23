@@ -25,6 +25,8 @@ jobs:
           strict: true
 
       - name: Build .app bundle
+        env:
+          VERSION: ${{ steps.version.outputs.semantic_version }}
         run: scripts/build.sh
 
       - name: Zip .app bundle
