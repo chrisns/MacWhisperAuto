@@ -3,8 +3,6 @@ name: Release
 on:
   push:
     branches: [main]
-    tags:
-      - 'v*'
 
 permissions:
   contents: write
@@ -20,14 +18,11 @@ jobs:
 
       - name: Generate version
         id: version
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          else
-            TAG="v0.0.$(git rev-list --count HEAD)-${GITHUB_SHA::7}"
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-            git tag "$TAG"
-          fi
+        uses: lukaszraczylo/semver-generator@v1
+        with:
+          config_file: semver.yaml
+          repository_local: true
+          strict: true
 
       - name: Build .app bundle
         run: scripts/build.sh
@@ -44,9 +39,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
+          gh release create "v${{ steps.version.outputs.semantic_version }}" \
             build/MacWhisperAuto.app.zip \
             MacWhisperAuto-Extension.zip \
-            --title "MacWhisperAuto ${{ steps.version.outputs.tag }}" \
+            --title "MacWhisperAuto v${{ steps.version.outputs.semantic_version }}" \
             --generate-notes \
             --target "${{ github.sha }}"
