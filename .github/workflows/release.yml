@@ -32,6 +32,10 @@ jobs:
           cd build
           zip -r MacWhisperAuto.app.zip MacWhisperAuto.app
 
+      - name: Compute SHA256
+        id: sha256
+        run: echo "hash=$(shasum -a 256 build/MacWhisperAuto.app.zip | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
       - name: Zip browser extension
         run: zip -r MacWhisperAuto-Extension.zip Extension/
 
@@ -45,3 +49,12 @@ jobs:
             --title "MacWhisperAuto v${{ steps.version.outputs.semantic_version }}" \
             --generate-notes \
             --target "${{ github.sha }}"
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          gh workflow run update.yml \
+            --repo chrisns/homebrew-macwhisperauto \
+            --field version="${{ steps.version.outputs.semantic_version }}" \
+            --field sha256="${{ steps.sha256.outputs.hash }}"

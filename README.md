@@ -125,6 +125,14 @@ The state machine is pure -- it returns side effects (`startRecording`, `stopRec
 
 ## Installation
 
+### Homebrew (recommended)
+
+```bash
+brew install --cask chrisns/macwhisperauto/macwhisperauto
+```
+
+MacWhisperAuto is ad-hoc signed and not notarized. On first launch, macOS Gatekeeper will block it — allow it in **System Settings > Privacy & Security > Security > Open Anyway**.
+
 ### Build from Source
 
 ```bash
