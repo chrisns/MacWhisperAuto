@@ -12,6 +12,7 @@ import os
 final class ExtensionMessageHandler: Sendable {
     let onSignal: @Sendable (MeetingSignal) -> Void
     let onConnectionStateChanged: @Sendable (Bool) -> Void
+    let onExtensionVersionReceived: @Sendable (String) -> Void
 
     /// Only emit inactive after no connection has reported meetings for this long.
     /// Must exceed the heartbeat interval (~20s) to survive interleaved heartbeats.
@@ -22,10 +23,12 @@ final class ExtensionMessageHandler: Sendable {
 
     init(
         onSignal: @escaping @Sendable (MeetingSignal) -> Void,
-        onConnectionStateChanged: @escaping @Sendable (Bool) -> Void
+        onConnectionStateChanged: @escaping @Sendable (Bool) -> Void,
+        onExtensionVersionReceived: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.onSignal = onSignal
         self.onConnectionStateChanged = onConnectionStateChanged
+        self.onExtensionVersionReceived = onExtensionVersionReceived
     }
 
     /// Process a raw WebSocket message (JSON data).
@@ -50,6 +53,11 @@ final class ExtensionMessageHandler: Sendable {
 
     /// Heartbeat reconstructs full state from a single message (FR38).
     private func handleHeartbeat(_ json: [String: Any]) {
+        // Extract extension version from heartbeat
+        if let version = json["extension_version"] as? String {
+            onExtensionVersionReceived(version)
+        }
+
         guard let meetings = json["active_meetings"] as? [[String: Any]] else {
             emitInactiveIfGracePeriodElapsed()
             return
