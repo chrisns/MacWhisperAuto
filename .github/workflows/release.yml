@@ -37,12 +37,16 @@ jobs:
           cd build
           zip -r MacWhisperAuto.app.zip MacWhisperAuto.app
 
+      - name: Zip browser extension
+        run: zip -r MacWhisperAuto-Extension.zip Extension/
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
             build/MacWhisperAuto.app.zip \
+            MacWhisperAuto-Extension.zip \
             --title "MacWhisperAuto ${{ steps.version.outputs.tag }}" \
             --generate-notes \
             --target "${{ github.sha }}" \
