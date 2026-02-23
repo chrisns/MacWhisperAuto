@@ -32,6 +32,11 @@ mkdir -p "$MACOS"
 cp "$EXECUTABLE" "$MACOS/MacWhisperAuto"
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 
+# Copy app icon
+RESOURCES="$CONTENTS/Resources"
+mkdir -p "$RESOURCES"
+cp "$ROOT/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
+
 # Stamp version into app Info.plist
 if [ -n "$SEMVER" ]; then
     echo "==> Stamping version $SEMVER into Info.plist..."

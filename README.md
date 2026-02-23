@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Resources/icon.png" alt="MacWhisperAuto" width="128" height="128">
+</p>
+
 # MacWhisperAuto
 
 A macOS menu bar app that automatically detects meetings across multiple platforms and triggers [MacWhisper](https://goodsnooze.gumroad.com/l/macwhisper) to record them.
