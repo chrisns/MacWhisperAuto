@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissionCheckTimer: DispatchSourceTimer?
     private var webSocketServer: WebSocketServer?
     private var extensionMessageHandler: ExtensionMessageHandler?
+    private var startRecordingRetryCount = 0
+    private let maxStartRecordingRetries = 3
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DetectionLogger.shared.lifecycle("Application launched")
@@ -260,6 +262,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        startRecordingRetryCount = 0
+
         let controller = macWhisperController
         let coordRef = coordinator
         let stateRef = appState
@@ -271,30 +275,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     stateRef.addActivity("Failed to launch MacWhisper", platform: platform)
                     return
                 }
-                let innerCoord = coordRef
-                let innerState = stateRef
-                controller.startRecording(for: platform) { result in
-                    Task { @MainActor in
-                        switch result {
-                        case .success:
-                            innerState.addActivity(
-                                "Recording started for \(platform.displayName)", platform: platform
-                            )
-                        case .failure(let error):
-                            DetectionLogger.shared.error(.automation, "Start recording failed: \(error)")
-                            innerState.addActivity("Recording failed: \(error)", platform: platform)
-                            switch error {
-                            case .macWhisperNotRunning:
-                                innerCoord?.reportError(.macWhisperNotRunning)
-                            case .elementNotFound(let desc):
-                                innerCoord?.reportError(.axElementNotFound(desc))
-                            case .timeout:
-                                innerCoord?.reportError(.macWhisperUnresponsive)
-                            case .actionFailed:
-                                innerCoord?.reportError(.macWhisperUnresponsive)
-                            case .noPermission:
-                                innerCoord?.reportError(.permissionDenied(.accessibility))
-                            }
+                self.attemptStartRecording(platform: platform)
+            }
+        }
+    }
+
+    private func attemptStartRecording(platform: Platform) {
+        // If the meeting ended during retries, abandon silently
+        guard case .recording = appState.meetingState else {
+            startRecordingRetryCount = 0
+            return
+        }
+
+        let controller = macWhisperController
+        let coordRef = coordinator
+        let stateRef = appState
+
+        controller.startRecording(for: platform) { result in
+            Task { @MainActor in
+                switch result {
+                case .success:
+                    self.startRecordingRetryCount = 0
+                    stateRef.addActivity(
+                        "Recording started for \(platform.displayName)", platform: platform
+                    )
+                case .failure(let error):
+                    if case .elementNotFound = error,
+                       self.startRecordingRetryCount < self.maxStartRecordingRetries {
+                        self.startRecordingRetryCount += 1
+                        let attempt = self.startRecordingRetryCount
+                        DetectionLogger.shared.automation(
+                            "Button not found, retrying (\(attempt)/\(self.maxStartRecordingRetries))...",
+                            action: "startRecording"
+                        )
+                        stateRef.addActivity(
+                            "Button not found, retrying (\(attempt)/\(self.maxStartRecordingRetries))..."
+                        )
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                            self?.attemptStartRecording(platform: platform)
+                        }
+                    } else {
+                        self.startRecordingRetryCount = 0
+                        DetectionLogger.shared.error(.automation, "Start recording failed: \(error)")
+                        stateRef.addActivity("Recording failed: \(error)", platform: platform)
+                        switch error {
+                        case .macWhisperNotRunning:
+                            coordRef?.reportError(.macWhisperNotRunning)
+                        case .elementNotFound(let desc):
+                            coordRef?.reportError(.axElementNotFound(desc))
+                        case .timeout:
+                            coordRef?.reportError(.macWhisperUnresponsive)
+                        case .actionFailed:
+                            coordRef?.reportError(.macWhisperUnresponsive)
+                        case .noPermission:
+                            coordRef?.reportError(.permissionDenied(.accessibility))
                         }
                     }
                 }
@@ -373,9 +407,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Sleep / Wake / App Termination
+}
 
-    private func registerForSystemNotifications() {
+// MARK: - Sleep / Wake / App Termination
+
+extension AppDelegate {
+    func registerForSystemNotifications() {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(
             self,
@@ -403,7 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func unregisterFromSystemNotifications() {
+    func unregisterFromSystemNotifications() {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
@@ -458,10 +495,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+}
 
-    // MARK: - Login Item
+// MARK: - Login Item
 
-    private func registerLoginItem() {
+extension AppDelegate {
+    func registerLoginItem() {
         if #available(macOS 13.0, *) {
             let service = SMAppService.mainApp
             if service.status != .enabled {
