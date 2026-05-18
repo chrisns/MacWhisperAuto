@@ -3,14 +3,16 @@ import Foundation
 enum Platform: String, CaseIterable, Sendable {
     case teams, zoom, slack, faceTime, chime, browser
 
-    var macWhisperButtonName: String {
+    /// Title of the platform's item under MacWhisper's status-menu "Record Meeting" submenu.
+    /// `nil` means the platform is not exposed in the menu and must use a window-based fallback.
+    var macWhisperMenuTitle: String? {
         switch self {
-        case .teams: "Record Teams"
-        case .zoom: "Record Zoom"
-        case .slack: "Record Slack"
-        case .faceTime: "Record FaceTime"
-        case .chime: "Record Chime"
-        case .browser: "Record Comet"
+        case .teams: "Teams"
+        case .zoom: "Zoom"
+        case .slack: "Slack"
+        case .chime: "Chime"
+        case .browser: "Comet"
+        case .faceTime: nil
         }
     }
 

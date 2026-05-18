@@ -138,46 +138,88 @@ final class MacWhisperController: Sendable {
         return .success(element)
     }
 
-    /// Start recording - find "Record [Platform]" button and press it.
+    /// Start recording via MacWhisper's status-menu "Record Meeting" submenu.
+    /// FaceTime falls through to a window-based fallback because the menu has no FaceTime item.
     private func performStartRecording(platform: Platform) -> Result<Void, AXError> {
         switch createAppElement() {
         case .failure(let error):
             return .failure(error)
         case .success(let appElement):
-            if platform == .faceTime {
-                return performStartFaceTimeRecording(appElement: appElement)
+            if let menuTitle = platform.macWhisperMenuTitle {
+                return performStartRecordingViaMenu(
+                    appElement: appElement, menuTitle: menuTitle, platform: platform
+                )
             }
-
-            let buttonName = platform.macWhisperButtonName
-            DetectionLogger.shared.automation(
-                "Starting recording: looking for '\(buttonName)'", action: "startRecording"
-            )
-
-            let windows = AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute)
-            for window in windows {
-                if let button = AccessibilityHelper.findByDescription(
-                    window, description: buttonName
-                ) {
-                    DetectionLogger.shared.automation(
-                        "Found '\(buttonName)' - pressing", action: "startRecording"
-                    )
-                    let result = AccessibilityHelper.press(button)
-                    switch result {
-                    case .success:
-                        DetectionLogger.shared.automation(
-                            "Recording started for \(platform.displayName)",
-                            action: "startRecording"
-                        )
-                    case .failure(let error):
-                        DetectionLogger.shared.error(
-                            .automation, "Failed to press '\(buttonName)': \(error)"
-                        )
-                    }
-                    return result
-                }
-            }
-            return .failure(.elementNotFound(description: buttonName))
+            return performStartFaceTimeRecording(appElement: appElement)
         }
+    }
+
+    /// Navigate the status-menu extra → "Record Meeting" submenu → <platform> item.
+    private func performStartRecordingViaMenu(
+        appElement: AXUIElement, menuTitle: String, platform: Platform
+    ) -> Result<Void, AXError> {
+        guard let extras: AXUIElement =
+                AccessibilityHelper.attribute(appElement, kAXExtrasMenuBarAttribute) else {
+            return .failure(.elementNotFound(description: "MacWhisper menu extra"))
+        }
+        let items = AccessibilityHelper.arrayAttribute(extras, kAXChildrenAttribute)
+        guard let menuExtra = items.first else {
+            return .failure(.elementNotFound(description: "MacWhisper menu extra"))
+        }
+
+        DetectionLogger.shared.automation(
+            "Opening MacWhisper menu extra", action: "startRecording"
+        )
+        let openErr = AXUIElementPerformAction(menuExtra, kAXPressAction as CFString)
+        guard openErr == .success else {
+            return .failure(.actionFailed(
+                element: "AXMenuExtra", action: "AXPress", code: openErr.rawValue
+            ))
+        }
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let recordMeeting = AccessibilityHelper.findMenuItemByTitle(
+            menuExtra, title: "Record Meeting"
+        ) else {
+            AXUIElementPerformAction(menuExtra, kAXCancelAction as CFString)
+            return .failure(.elementNotFound(description: "Record Meeting"))
+        }
+
+        DetectionLogger.shared.automation(
+            "Expanding Record Meeting submenu", action: "startRecording"
+        )
+        let expandErr = AXUIElementPerformAction(recordMeeting, kAXPressAction as CFString)
+        guard expandErr == .success else {
+            AXUIElementPerformAction(menuExtra, kAXCancelAction as CFString)
+            return .failure(.actionFailed(
+                element: "AXMenuItem:Record Meeting", action: "AXPress", code: expandErr.rawValue
+            ))
+        }
+        Thread.sleep(forTimeInterval: 0.3)
+
+        guard let platformItem = AccessibilityHelper.findMenuItemByTitle(
+            recordMeeting, title: menuTitle
+        ) else {
+            AXUIElementPerformAction(menuExtra, kAXCancelAction as CFString)
+            return .failure(.elementNotFound(description: menuTitle))
+        }
+
+        DetectionLogger.shared.automation(
+            "Pressing '\(menuTitle)' menu item", action: "startRecording"
+        )
+        let result = AccessibilityHelper.press(platformItem)
+        switch result {
+        case .success:
+            DetectionLogger.shared.automation(
+                "Recording started for \(platform.displayName)", action: "startRecording"
+            )
+        case .failure(let error):
+            AXUIElementPerformAction(menuExtra, kAXCancelAction as CFString)
+            DetectionLogger.shared.error(
+                .automation, "Failed to press '\(menuTitle)': \(error)"
+            )
+        }
+        return result
     }
 
     /// Manual recording by raw button name.
@@ -285,7 +327,12 @@ final class MacWhisperController: Sendable {
                 }
             }
 
-            return .failure(.elementNotFound(description: "Finish Recording dialog or active recording"))
+            // No dialog and no active recording row — MacWhisper isn't recording.
+            // Treat stop as idempotent so the app's state still clears to idle.
+            DetectionLogger.shared.automation(
+                "No active recording found — treating stop as no-op", action: "stopRecording"
+            )
+            return .success(())
         }
     }
 
