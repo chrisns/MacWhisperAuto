@@ -61,19 +61,22 @@ final class ZoomDetector: MeetingDetector, WindowListConsumer, @unchecked Sendab
         let lastActive = _lastNetworkActive.withLock { old -> Bool in
             let was = old; old = active; return was
         }
-        if active != lastActive {
+        let changed = active != lastActive
+        if changed {
             DetectionLogger.shared.detection(
                 "Network UDP sockets=\(udpCount) active=\(active)",
                 platform: .zoom, signal: .networkUDP, active: active
             )
-            let signal = MeetingSignal(
+        }
+        // Emit on transition OR while active (heartbeat — recovers stuck idle state)
+        if changed || active {
+            onSignal(MeetingSignal(
                 platform: .zoom,
                 isActive: active,
                 confidence: .high,
                 source: .networkUDP,
                 timestamp: Date()
-            )
-            onSignal(signal)
+            ))
         }
     }
 
@@ -115,19 +118,21 @@ final class ZoomDetector: MeetingDetector, WindowListConsumer, @unchecked Sendab
             return was
         }
 
-        if active != lastActive {
+        let changed = active != lastActive
+        if changed {
             DetectionLogger.shared.detection(
                 "Zoom meeting window \(active ? "found" : "gone")",
                 platform: .zoom, signal: .cgWindowList, active: active
             )
-            let signal = MeetingSignal(
+        }
+        if changed || active {
+            onSignal(MeetingSignal(
                 platform: .zoom,
                 isActive: active,
                 confidence: .high,
                 source: .cgWindowList,
                 timestamp: Date()
-            )
-            onSignal(signal)
+            ))
         }
     }
 }

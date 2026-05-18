@@ -59,19 +59,21 @@ final class ChimeDetector: MeetingDetector, WindowListConsumer, @unchecked Senda
         let lastActive = _lastNetworkActive.withLock { old -> Bool in
             let was = old; old = active; return was
         }
-        if active != lastActive {
+        let changed = active != lastActive
+        if changed {
             DetectionLogger.shared.detection(
                 "Network UDP sockets=\(udpCount) active=\(active)",
                 platform: .chime, signal: .networkUDP, active: active
             )
-            let signal = MeetingSignal(
+        }
+        if changed || active {
+            onSignal(MeetingSignal(
                 platform: .chime,
                 isActive: active,
                 confidence: .high,
                 source: .networkUDP,
                 timestamp: Date()
-            )
-            onSignal(signal)
+            ))
         }
     }
 
@@ -111,19 +113,21 @@ final class ChimeDetector: MeetingDetector, WindowListConsumer, @unchecked Senda
             return was
         }
 
-        if active != lastActive {
+        let changed = active != lastActive
+        if changed {
             DetectionLogger.shared.detection(
                 "Chime meeting window \(active ? "found" : "gone")",
                 platform: .chime, signal: .cgWindowList, active: active
             )
-            let signal = MeetingSignal(
+        }
+        if changed || active {
+            onSignal(MeetingSignal(
                 platform: .chime,
                 isActive: active,
                 confidence: .high,
                 source: .cgWindowList,
                 timestamp: Date()
-            )
-            onSignal(signal)
+            ))
         }
     }
 }

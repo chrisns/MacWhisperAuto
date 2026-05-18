@@ -141,19 +141,21 @@ final class FaceTimeDetector: MeetingDetector, WindowListConsumer, @unchecked Se
             return was
         }
 
-        if active != lastActive {
+        let changed = active != lastActive
+        if changed {
             DetectionLogger.shared.detection(
                 "FaceTime call \(active ? "detected" : "ended") (assertion=\(assertionActive), window=\(windowVisible))",
                 platform: .faceTime, signal: .iopmAssertion, active: active
             )
-            let signal = MeetingSignal(
+        }
+        if changed || active {
+            onSignal(MeetingSignal(
                 platform: .faceTime,
                 isActive: active,
                 confidence: .high,
                 source: .iopmAssertion,
                 timestamp: Date()
-            )
-            onSignal(signal)
+            ))
         }
     }
 }
