@@ -3,14 +3,22 @@ name: Release
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build & Release
-    runs-on: macos-15
+  version:
+    name: Generate version
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.version.outputs.semantic_version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -24,9 +32,18 @@ jobs:
           repository_local: true
           strict: true
 
+  release:
+    name: Build & Release
+    needs: version
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
       - name: Build .app bundle
         env:
-          VERSION: ${{ steps.version.outputs.semantic_version }}
+          VERSION: ${{ needs.version.outputs.semver }}
         run: scripts/build.sh
 
       - name: Zip .app bundle
@@ -42,21 +59,23 @@ jobs:
         run: zip -r MacWhisperAuto-Extension.zip Extension/
 
       - name: Create GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ steps.version.outputs.semantic_version }}" \
+          gh release create "v${{ needs.version.outputs.semver }}" \
             build/MacWhisperAuto.app.zip \
             MacWhisperAuto-Extension.zip \
-            --title "MacWhisperAuto v${{ steps.version.outputs.semantic_version }}" \
+            --title "MacWhisperAuto v${{ needs.version.outputs.semver }}" \
             --generate-notes \
             --target "${{ github.sha }}"
 
       - name: Update Homebrew tap
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           gh workflow run update.yml \
             --repo chrisns/homebrew-macwhisperauto \
-            --field version="${{ steps.version.outputs.semantic_version }}" \
+            --field version="${{ needs.version.outputs.semver }}" \
             --field sha256="${{ steps.sha256.outputs.hash }}"
