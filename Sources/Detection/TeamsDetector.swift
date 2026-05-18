@@ -228,12 +228,16 @@ final class TeamsDetector: MeetingDetector, WindowListConsumer, @unchecked Senda
         let lastActive = _lastIOPMActive.withLock { old -> Bool in
             let was = old; old = active; return was
         }
-        // Only log and emit on state change to avoid flooding
-        if active != lastActive {
+        let changed = active != lastActive
+        // Log only on transitions to avoid flooding; emit on transition OR while
+        // active (heartbeat — lets the state machine recover if it got stuck idle).
+        if changed {
             DetectionLogger.shared.detection(
                 "IOPM assertion active=\(active)",
                 platform: .teams, signal: .iopmAssertion, active: active
             )
+        }
+        if changed || active {
             emitSignal(active: active, source: .iopmAssertion, confidence: .high)
         }
     }
@@ -265,11 +269,14 @@ final class TeamsDetector: MeetingDetector, WindowListConsumer, @unchecked Senda
         let lastActive = _lastNetworkActive.withLock { old -> Bool in
             let was = old; old = active; return was
         }
-        if active != lastActive {
+        let changed = active != lastActive
+        if changed {
             DetectionLogger.shared.detection(
                 "Network UDP sockets=\(udpCount) active=\(active)",
                 platform: .teams, signal: .networkUDP, active: active
             )
+        }
+        if changed || active {
             emitSignal(active: active, source: .networkUDP, confidence: .high)
         }
     }
@@ -328,13 +335,15 @@ final class TeamsDetector: MeetingDetector, WindowListConsumer, @unchecked Senda
             old = active
             return was
         }
-
-        // Only emit on state change to avoid flooding the state machine
-        if active != lastActive {
+        let changed = active != lastActive
+        if changed {
             DetectionLogger.shared.detection(
                 "Teams meeting window \(active ? "found" : "gone")",
                 platform: .teams, signal: .cgWindowList, active: active
             )
+        }
+        // Emit on transition OR while active (heartbeat — recovers stuck idle state)
+        if changed || active {
             emitSignal(active: active, source: .cgWindowList, confidence: .high)
         }
     }

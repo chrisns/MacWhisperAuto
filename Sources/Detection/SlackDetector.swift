@@ -78,7 +78,7 @@ final class SlackDetector: MeetingDetector, WindowListConsumer, @unchecked Senda
         let sustained = consecutiveOverThreshold >= Self.sustainedPollsRequired
         let active = sustained && iopmActive
 
-        // Per-poll diagnostic (debug level) - so Phase 2 tuning is data-driven.
+        // Per-poll diagnostic - so future tuning is data-driven.
         DetectionLogger.shared.detection(
             "Slack poll udp=\(udpCount) consec=\(consecutiveOverThreshold) iopm=\(iopmActive) sustained=\(sustained) active=\(active)",
             platform: .slack, signal: .networkUDP
@@ -90,35 +90,40 @@ final class SlackDetector: MeetingDetector, WindowListConsumer, @unchecked Senda
 
         let was = lastNetworkActive
         lastNetworkActive = active
-        guard active != was else { return }
+        let changed = active != was
 
-        if active {
-            activeSince = Date()
-            let endpoints = Self.slackUDPEndpoints(limit: 10).joined(separator: ",")
-            let names = assertionNames.joined(separator: "|")
-            DetectionLogger.shared.detection(
-                "Slack ACTIVE udp=\(udpCount) peak=\(peakUDPDuringActive) iopm=[\(names)] endpoints=[\(endpoints)]",
-                platform: .slack, signal: .networkUDP, active: true
-            )
-        } else {
-            let duration = activeSince.map { Date().timeIntervalSince($0) } ?? 0
-            let likelyFP = duration < Self.falsePositiveDurationCutoff
-            DetectionLogger.shared.detection(
-                "Slack INACTIVE duration=\(String(format: "%.1f", duration))s peak=\(peakUDPDuringActive) likelyFalsePositive=\(likelyFP)",
-                platform: .slack, signal: .networkUDP, active: false
-            )
-            activeSince = nil
-            peakUDPDuringActive = 0
+        // Edge logs only on transitions (active/inactive summaries)
+        if changed {
+            if active {
+                activeSince = Date()
+                let endpoints = Self.slackUDPEndpoints(limit: 10).joined(separator: ",")
+                let names = assertionNames.joined(separator: "|")
+                DetectionLogger.shared.detection(
+                    "Slack ACTIVE udp=\(udpCount) peak=\(peakUDPDuringActive) iopm=[\(names)] endpoints=[\(endpoints)]",
+                    platform: .slack, signal: .networkUDP, active: true
+                )
+            } else {
+                let duration = activeSince.map { Date().timeIntervalSince($0) } ?? 0
+                let likelyFP = duration < Self.falsePositiveDurationCutoff
+                DetectionLogger.shared.detection(
+                    "Slack INACTIVE duration=\(String(format: "%.1f", duration))s peak=\(peakUDPDuringActive) likelyFalsePositive=\(likelyFP)",
+                    platform: .slack, signal: .networkUDP, active: false
+                )
+                activeSince = nil
+                peakUDPDuringActive = 0
+            }
         }
 
-        let signal = MeetingSignal(
-            platform: .slack,
-            isActive: active,
-            confidence: .high,
-            source: .networkUDP,
-            timestamp: Date()
-        )
-        onSignal(signal)
+        // Emit on transition OR while active (heartbeat — recovers stuck idle state)
+        if changed || active {
+            onSignal(MeetingSignal(
+                platform: .slack,
+                isActive: active,
+                confidence: .high,
+                source: .networkUDP,
+                timestamp: Date()
+            ))
+        }
     }
 
     // MARK: - lsof helpers
@@ -212,19 +217,21 @@ final class SlackDetector: MeetingDetector, WindowListConsumer, @unchecked Senda
             return was
         }
 
-        if active != lastActive {
+        let changed = active != lastActive
+        if changed {
             DetectionLogger.shared.detection(
                 "Slack huddle window \(active ? "found" : "gone")",
                 platform: .slack, signal: .cgWindowList, active: active
             )
-            let signal = MeetingSignal(
+        }
+        if changed || active {
+            onSignal(MeetingSignal(
                 platform: .slack,
                 isActive: active,
                 confidence: .high,
                 source: .cgWindowList,
                 timestamp: Date()
-            )
-            onSignal(signal)
+            ))
         }
     }
 }
