@@ -75,6 +75,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not configured; skipping Homebrew tap update."
+            echo "To enable, create a PAT with 'workflow' scope for chrisns/homebrew-macwhisperauto and set it as the HOMEBREW_TAP_TOKEN repo secret."
+            exit 0
+          fi
           gh workflow run update.yml \
             --repo chrisns/homebrew-macwhisperauto \
             --field version="${{ needs.version.outputs.semver }}" \
