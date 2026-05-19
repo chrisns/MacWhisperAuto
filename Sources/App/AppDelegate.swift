@@ -14,7 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var webSocketServer: WebSocketServer?
     private var extensionMessageHandler: ExtensionMessageHandler?
     private var startRecordingRetryCount = 0
-    private let maxStartRecordingRetries = 3
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DetectionLogger.shared.lifecycle("Application launched")
@@ -305,6 +304,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Backoff schedule for transient "element not found" retries.
+    /// Quick early retries (menu may be opening), then plateau at 30s.
+    private static func startRecordingRetryDelay(attempt: Int) -> TimeInterval {
+        switch attempt {
+        case ..<4: 2.0
+        case ..<7: 5.0
+        case ..<10: 10.0
+        default: 30.0
+        }
+    }
+
     private func attemptStartRecording(platform: Platform) {
         // If the meeting ended during retries, abandon silently
         guard case .recording = appState.meetingState else {
@@ -325,18 +335,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         "Recording started for \(platform.displayName)", platform: platform
                     )
                 case .failure(let error):
-                    if case .elementNotFound = error,
-                       self.startRecordingRetryCount < self.maxStartRecordingRetries {
+                    if case .elementNotFound = error {
+                        // Retry indefinitely while the meeting is still active.
+                        // MacWhisper's menu extra is often briefly unavailable
+                        // (app launching, menu loading, AX cache cold) and
+                        // surfacing a hard error here just leaves recording stuck.
                         self.startRecordingRetryCount += 1
                         let attempt = self.startRecordingRetryCount
+                        let delay = Self.startRecordingRetryDelay(attempt: attempt)
                         DetectionLogger.shared.automation(
-                            "Button not found, retrying (\(attempt)/\(self.maxStartRecordingRetries))...",
+                            "Button not found, retrying in \(delay)s (attempt \(attempt))...",
                             action: "startRecording"
                         )
-                        stateRef.addActivity(
-                            "Button not found, retrying (\(attempt)/\(self.maxStartRecordingRetries))..."
-                        )
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                        // Log activity once at start, then every 10 attempts to avoid spam
+                        if attempt == 1 || attempt % 10 == 0 {
+                            stateRef.addActivity(
+                                "Button not found, retrying in background (attempt \(attempt))..."
+                            )
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                             self?.attemptStartRecording(platform: platform)
                         }
                     } else {
