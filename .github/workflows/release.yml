@@ -26,7 +26,7 @@ jobs:
 
       - name: Generate version
         id: version
-        uses: lukaszraczylo/semver-generator@a223f15e1c4b90eb5c1a691bcf2dbf64bed09fbb # v1
+        uses: lukaszraczylo/semver-generator@dfeb03b8bb764230e2fedcd4cb65b88d9919988b # v1
         with:
           config_file: semver.yaml
           repository_local: true
