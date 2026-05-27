@@ -71,16 +71,26 @@ final class StatusBarController {
 
     private func updateIcon() {
         guard let button = statusItem.button else { return }
+        // Menu-rename alert takes precedence over normal state icons —
+        // it's actionable and the user needs to see it.
         let symbolName: String
-        switch appState.meetingState {
-        case .idle:
-            symbolName = appState.permissionsGranted ? "mic.circle" : "exclamationmark.triangle"
-        case .detecting:
-            symbolName = "mic.badge.xmark"
-        case .recording:
-            symbolName = "record.circle.fill"
-        case .error:
-            symbolName = "exclamationmark.triangle"
+        if appState.macWhisperMenuItemMissing != nil {
+            symbolName = "exclamationmark.triangle.fill"
+        } else {
+            switch appState.meetingState {
+            case .idle:
+                symbolName = appState.permissionsGranted ? "mic.circle" : "exclamationmark.triangle"
+            case .detecting:
+                symbolName = "mic.badge.xmark"
+            case .recording:
+                // Different icon while we're issuing/retrying the start command
+                // vs once MacWhisper has confirmed it's actually recording.
+                symbolName = appState.macWhisperObservedRecording
+                    ? "record.circle.fill"
+                    : "record.circle"
+            case .error:
+                symbolName = "exclamationmark.triangle"
+            }
         }
         button.image = NSImage(
             systemSymbolName: symbolName,

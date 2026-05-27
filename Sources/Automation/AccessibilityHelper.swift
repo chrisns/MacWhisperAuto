@@ -76,6 +76,71 @@ enum AccessibilityHelper {
         return nil
     }
 
+    /// Recursive search for AXMenuItem by title. Tries exact match first,
+    /// then falls back to case-insensitive `contains` so subtle renames
+    /// (e.g. "Teams" → "Microsoft Teams") still resolve.
+    static func findMenuItemByFuzzyTitle(
+        _ parent: AXUIElement,
+        title: String,
+        maxDepth: Int = 6
+    ) -> AXUIElement? {
+        if let exact = findMenuItemByTitle(parent, title: title, maxDepth: maxDepth) {
+            return exact
+        }
+        let needle = title.lowercased()
+        return findMenuItemMatching(parent, maxDepth: maxDepth) { itemTitle in
+            itemTitle.lowercased().contains(needle)
+        }
+    }
+
+    /// Recursive search for AXMenuItem whose title satisfies a predicate.
+    static func findMenuItemMatching(
+        _ parent: AXUIElement,
+        maxDepth: Int = 6,
+        currentDepth: Int = 0,
+        predicate: (String) -> Bool
+    ) -> AXUIElement? {
+        guard currentDepth <= maxDepth else { return nil }
+        let role: String = attribute(parent, kAXRoleAttribute) ?? ""
+        let itemTitle: String = attribute(parent, kAXTitleAttribute) ?? ""
+        if role == "AXMenuItem" && !itemTitle.isEmpty && predicate(itemTitle) {
+            return parent
+        }
+        for child in arrayAttribute(parent, kAXChildrenAttribute) {
+            if let found = findMenuItemMatching(
+                child, maxDepth: maxDepth,
+                currentDepth: currentDepth + 1,
+                predicate: predicate
+            ) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    /// Collect all non-empty AXMenuItem titles under the given element.
+    static func enumerateMenuItemTitles(
+        _ parent: AXUIElement,
+        maxDepth: Int = 4,
+        currentDepth: Int = 0
+    ) -> [String] {
+        guard currentDepth <= maxDepth else { return [] }
+        var titles: [String] = []
+        let role: String = attribute(parent, kAXRoleAttribute) ?? ""
+        if role == "AXMenuItem" {
+            let title: String = attribute(parent, kAXTitleAttribute) ?? ""
+            if !title.isEmpty {
+                titles.append(title)
+            }
+        }
+        for child in arrayAttribute(parent, kAXChildrenAttribute) {
+            titles.append(contentsOf: enumerateMenuItemTitles(
+                child, maxDepth: maxDepth, currentDepth: currentDepth + 1
+            ))
+        }
+        return titles
+    }
+
     /// Recursive search for AXMenuItem whose title starts with a prefix
     /// (e.g. "Recording" for "Recording 00:03:42").
     static func findMenuItemWithTitlePrefix(

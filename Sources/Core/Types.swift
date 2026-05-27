@@ -49,6 +49,7 @@ enum MeetingState: Equatable, Sendable {
 enum ErrorKind: Equatable, Sendable {
     case macWhisperUnresponsive
     case macWhisperNotRunning
+    case macWhisperNotInstalled
     case axElementNotFound(String)
     case permissionDenied(Permission)
     case webSocketPortUnavailable
@@ -57,6 +58,7 @@ enum ErrorKind: Equatable, Sendable {
         switch (lhs, rhs) {
         case (.macWhisperUnresponsive, .macWhisperUnresponsive): true
         case (.macWhisperNotRunning, .macWhisperNotRunning): true
+        case (.macWhisperNotInstalled, .macWhisperNotInstalled): true
         case (.axElementNotFound(let l), .axElementNotFound(let r)): l == r
         case (.permissionDenied(let l), .permissionDenied(let r)): l == r
         case (.webSocketPortUnavailable, .webSocketPortUnavailable): true
@@ -74,6 +76,7 @@ extension ErrorKind {
         switch self {
         case .macWhisperUnresponsive: "MacWhisper is not responding"
         case .macWhisperNotRunning: "MacWhisper is not running"
+        case .macWhisperNotInstalled: "MacWhisper is not installed"
         case .axElementNotFound(let desc): "UI element not found: \(desc)"
         case .permissionDenied(let perm): "\(perm.rawValue) permission denied"
         case .webSocketPortUnavailable: "WebSocket port 8765 unavailable"
