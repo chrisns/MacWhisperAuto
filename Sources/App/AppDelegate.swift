@@ -448,72 +448,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Recording Observation (Reality Poll)
-
-    /// Start polling MacWhisper for its actual recording state. The poll
-    /// drives `appState.macWhisperObservedRecording`, which is what the UI
-    /// surfaces as "Recording" (vs "Starting..."). Safe to call repeatedly.
-    private func startRecordingObservation() {
-        if recordingObservationTimer != nil { return }
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 0.5, repeating: 2.0, leeway: .milliseconds(500))
-        timer.setEventHandler { [weak self] in
-            self?.pollRecordingObservation()
-        }
-        timer.resume()
-        recordingObservationTimer = timer
-    }
-
-    private func stopRecordingObservation() {
-        recordingObservationTimer?.cancel()
-        recordingObservationTimer = nil
-        appState.macWhisperObservedRecording = false
-        appState.macWhisperMenuItemMissing = nil
-    }
-
-    private func pollRecordingObservation() {
-        // Self-stop once intent leaves .recording and there's nothing left
-        // to confirm. Covers paths that transition to .idle/.error without
-        // going through handleStopRecording (e.g. clearError, sleep reset).
-        if case .recording = appState.meetingState {
-            // continue polling
-        } else if !appState.macWhisperObservedRecording {
-            stopRecordingObservation()
-            return
-        }
-
-        let stateRef = appState
-        macWhisperController.checkRecordingStatus { observed in
-            Task { @MainActor in
-                let previous = stateRef.macWhisperObservedRecording
-                if previous == observed { return }
-                stateRef.macWhisperObservedRecording = observed
-                let platform = stateRef.activePlatform
-                if observed {
-                    // false → true: MacWhisper is actually recording now.
-                    if case .recording = stateRef.meetingState {
-                        stateRef.addActivity(
-                            "Recording confirmed" +
-                                (platform.map { " for \($0.displayName)" } ?? ""),
-                            platform: platform
-                        )
-                    }
-                } else {
-                    // true → false: MacWhisper stopped recording. If intent
-                    // is still .recording, that means MacWhisper was stopped
-                    // externally (user pressed Finish, or MacWhisper crashed).
-                    if case .recording = stateRef.meetingState {
-                        stateRef.addActivity(
-                            "Recording stopped externally", platform: platform
-                        )
-                        stateRef.updateState(.idle)
-                        self.stopRecordingObservation()
-                    }
-                }
-            }
-        }
-    }
-
     private func handleStopRecording() {
         DetectionLogger.shared.automation("Side effect: stop recording", action: "stopRecording")
 
@@ -630,6 +564,74 @@ extension AppDelegate {
                 }
             default:
                 break
+            }
+        }
+    }
+}
+
+// MARK: - Recording Observation (Reality Poll)
+
+extension AppDelegate {
+    /// Start polling MacWhisper for its actual recording state. The poll
+    /// drives `appState.macWhisperObservedRecording`, which is what the UI
+    /// surfaces as "Recording" (vs "Starting..."). Safe to call repeatedly.
+    func startRecordingObservation() {
+        if recordingObservationTimer != nil { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.5, repeating: 2.0, leeway: .milliseconds(500))
+        timer.setEventHandler { [weak self] in
+            self?.pollRecordingObservation()
+        }
+        timer.resume()
+        recordingObservationTimer = timer
+    }
+
+    func stopRecordingObservation() {
+        recordingObservationTimer?.cancel()
+        recordingObservationTimer = nil
+        appState.macWhisperObservedRecording = false
+        appState.macWhisperMenuItemMissing = nil
+    }
+
+    private func pollRecordingObservation() {
+        // Self-stop once intent leaves .recording and there's nothing left
+        // to confirm. Covers paths that transition to .idle/.error without
+        // going through handleStopRecording (e.g. clearError, sleep reset).
+        if case .recording = appState.meetingState {
+            // continue polling
+        } else if !appState.macWhisperObservedRecording {
+            stopRecordingObservation()
+            return
+        }
+
+        let stateRef = appState
+        macWhisperController.checkRecordingStatus { observed in
+            Task { @MainActor in
+                let previous = stateRef.macWhisperObservedRecording
+                if previous == observed { return }
+                stateRef.macWhisperObservedRecording = observed
+                let platform = stateRef.activePlatform
+                if observed {
+                    // false → true: MacWhisper is actually recording now.
+                    if case .recording = stateRef.meetingState {
+                        stateRef.addActivity(
+                            "Recording confirmed" +
+                                (platform.map { " for \($0.displayName)" } ?? ""),
+                            platform: platform
+                        )
+                    }
+                } else {
+                    // true → false: MacWhisper stopped recording. If intent
+                    // is still .recording, that means MacWhisper was stopped
+                    // externally (user pressed Finish, or MacWhisper crashed).
+                    if case .recording = stateRef.meetingState {
+                        stateRef.addActivity(
+                            "Recording stopped externally", platform: platform
+                        )
+                        stateRef.updateState(.idle)
+                        self.stopRecordingObservation()
+                    }
+                }
             }
         }
     }
