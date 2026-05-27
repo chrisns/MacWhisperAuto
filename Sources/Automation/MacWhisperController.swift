@@ -277,46 +277,6 @@ final class MacWhisperController: Sendable {
         }
     }
 
-    /// FaceTime fallback: use "Record All System Audio" or "All System Audio".
-    private func performStartFaceTimeRecording(
-        appElement: AXUIElement
-    ) -> Result<Void, AXError> {
-        DetectionLogger.shared.automation(
-            "FaceTime: navigating to All System Audio fallback", action: "startRecording"
-        )
-
-        let windows = AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute)
-        for window in windows {
-            if let button = AccessibilityHelper.findByDescription(
-                window, description: "Record All System Audio"
-            ) {
-                let result = AccessibilityHelper.press(button)
-                if case .success = result {
-                    DetectionLogger.shared.automation(
-                        "Recording started for FaceTime (All System Audio)",
-                        action: "startRecording"
-                    )
-                }
-                return result
-            }
-            if let button = AccessibilityHelper.findByDescription(
-                window, description: "All System Audio"
-            ) {
-                let result = AccessibilityHelper.press(button)
-                if case .success = result {
-                    DetectionLogger.shared.automation(
-                        "Recording started for FaceTime (All System Audio)",
-                        action: "startRecording"
-                    )
-                }
-                return result
-            }
-        }
-        return .failure(
-            .elementNotFound(description: "Record All System Audio / All System Audio")
-        )
-    }
-
     /// Stop recording — press "Finish" on an existing finish-recording dialog,
     /// or find the active recording in the sidebar to trigger the dialog first.
     private func performStopRecording() -> Result<Void, AXError> {
