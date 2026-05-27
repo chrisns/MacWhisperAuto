@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var webSocketServer: WebSocketServer?
     private var extensionMessageHandler: ExtensionMessageHandler?
     private var startRecordingRetryCount = 0
+    private var recordingObservationTimer: DispatchSourceTimer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DetectionLogger.shared.lifecycle("Application launched")
@@ -170,6 +171,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DetectionLogger.shared.lifecycle("Application terminating")
         permissionCheckTimer?.cancel()
         permissionCheckTimer = nil
+        recordingObservationTimer?.cancel()
+        recordingObservationTimer = nil
         webSocketServer?.stop()
         coordinator?.stop()
         appMonitor?.stop()
@@ -287,21 +290,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         startRecordingRetryCount = 0
-
-        let controller = macWhisperController
-        let coordRef = coordinator
-        let stateRef = appState
-
-        controller.launchIfNeeded { launched in
-            Task { @MainActor in
-                guard launched else {
-                    coordRef?.reportError(.macWhisperNotRunning)
-                    stateRef.addActivity("Failed to launch MacWhisper", platform: platform)
-                    return
-                }
-                self.attemptStartRecording(platform: platform)
-            }
-        }
+        startRecordingObservation()
+        attemptStartRecording(platform: platform)
     }
 
     /// Backoff schedule for transient "element not found" retries.
@@ -316,65 +306,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func attemptStartRecording(platform: Platform) {
-        // If the meeting ended during retries, abandon silently
+        // If the meeting ended (or we transitioned to error/idle for any
+        // other reason) during retries, abandon silently.
         guard case .recording = appState.meetingState else {
             startRecordingRetryCount = 0
             return
         }
 
         let controller = macWhisperController
-        let coordRef = coordinator
         let stateRef = appState
 
-        controller.startRecording(for: platform) { result in
+        // Each attempt re-launches MacWhisper if needed, so a quit/crash
+        // during retries auto-recovers without leaving us stuck in error.
+        controller.launchIfNeeded { launchResult in
             Task { @MainActor in
-                switch result {
-                case .success:
+                guard case .recording = stateRef.meetingState else {
                     self.startRecordingRetryCount = 0
-                    stateRef.addActivity(
-                        "Recording started for \(platform.displayName)", platform: platform
-                    )
+                    return
+                }
+                switch launchResult {
                 case .failure(let error):
-                    if case .elementNotFound = error {
-                        // Retry indefinitely while the meeting is still active.
-                        // MacWhisper's menu extra is often briefly unavailable
-                        // (app launching, menu loading, AX cache cold) and
-                        // surfacing a hard error here just leaves recording stuck.
-                        self.startRecordingRetryCount += 1
-                        let attempt = self.startRecordingRetryCount
-                        let delay = Self.startRecordingRetryDelay(attempt: attempt)
-                        DetectionLogger.shared.automation(
-                            "Button not found, retrying in \(delay)s (attempt \(attempt))...",
-                            action: "startRecording"
-                        )
-                        // Log activity once at start, then every 10 attempts to avoid spam
-                        if attempt == 1 || attempt % 10 == 0 {
-                            stateRef.addActivity(
-                                "Button not found, retrying in background (attempt \(attempt))..."
-                            )
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                            self?.attemptStartRecording(platform: platform)
-                        }
-                    } else {
-                        self.startRecordingRetryCount = 0
-                        DetectionLogger.shared.error(.automation, "Start recording failed: \(error)")
-                        stateRef.addActivity("Recording failed: \(error)", platform: platform)
-                        switch error {
-                        case .macWhisperNotRunning:
-                            coordRef?.reportError(.macWhisperNotRunning)
-                        case .elementNotFound(let desc):
-                            coordRef?.reportError(.axElementNotFound(desc))
-                        case .timeout:
-                            coordRef?.reportError(.macWhisperUnresponsive)
-                        case .actionFailed:
-                            coordRef?.reportError(.macWhisperUnresponsive)
-                        case .noPermission:
-                            coordRef?.reportError(.permissionDenied(.accessibility))
+                    self.handleStartRecordingFailure(error, platform: platform)
+                case .success:
+                    controller.startRecording(for: platform) { result in
+                        Task { @MainActor in
+                            self.handleStartRecordingResult(result, platform: platform)
                         }
                     }
                 }
             }
+        }
+    }
+
+    private func handleStartRecordingResult(
+        _ result: Result<Void, AXError>, platform: Platform
+    ) {
+        switch result {
+        case .success:
+            startRecordingRetryCount = 0
+            appState.macWhisperMenuItemMissing = nil
+            // Don't log "Recording started" here — wait until the poll
+            // confirms MacWhisper actually has an active recording row.
+            // Log only that we successfully issued the start command.
+            DetectionLogger.shared.automation(
+                "Start command issued for \(platform.displayName)", action: "startRecording"
+            )
+        case .failure(let error):
+            handleStartRecordingFailure(error, platform: platform)
+        }
+    }
+
+    /// Decides whether a start-recording failure is transient (retry with
+    /// backoff) or permanent (report error and stop).
+    private func handleStartRecordingFailure(_ error: AXError, platform: Platform) {
+        switch error {
+        case .macWhisperNotInstalled:
+            startRecordingRetryCount = 0
+            DetectionLogger.shared.error(.automation, "MacWhisper not installed")
+            appState.addActivity("MacWhisper is not installed", platform: platform)
+            coordinator?.reportError(.macWhisperNotInstalled)
+        case .noPermission:
+            startRecordingRetryCount = 0
+            DetectionLogger.shared.error(.automation, "Accessibility permission denied")
+            appState.addActivity("Accessibility permission denied", platform: platform)
+            coordinator?.reportError(.permissionDenied(.accessibility))
+        case .elementNotFound, .macWhisperNotRunning, .timeout, .actionFailed:
+            // Treat all of these as transient and retry indefinitely
+            // while the meeting is still active. MacWhisper may be
+            // launching, the menu may be loading, AX cache may be cold,
+            // or the user may have just quit MacWhisper.
+            scheduleStartRecordingRetry(error: error, platform: platform)
+        }
+    }
+
+    private func scheduleStartRecordingRetry(error: AXError, platform: Platform) {
+        startRecordingRetryCount += 1
+        let attempt = startRecordingRetryCount
+        let delay = Self.startRecordingRetryDelay(attempt: attempt)
+        DetectionLogger.shared.automation(
+            "Start recording transient failure (\(error)), retrying in \(delay)s (attempt \(attempt))",
+            action: "startRecording"
+        )
+        // Activity log: once on first failure, then every 10th attempt.
+        if attempt == 1 || attempt % 10 == 0 {
+            appState.addActivity(
+                "Retrying in background (attempt \(attempt)): \(error)",
+                platform: platform
+            )
+        }
+        // If we've failed to find the menu item ≥3 times in a row, surface
+        // it visibly — likely a MacWhisper menu rename.
+        if attempt >= 3, case .elementNotFound = error {
+            appState.macWhisperMenuItemMissing = platform
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.attemptStartRecording(platform: platform)
         }
     }
 
@@ -386,21 +412,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let controller = macWhisperController
         let stateRef = appState
-        controller.launchIfNeeded { launched in
+        controller.launchIfNeeded { launchResult in
             Task { @MainActor in
-                guard launched else {
-                    stateRef.addActivity("Failed to launch MacWhisper")
+                switch launchResult {
+                case .failure(let error):
+                    stateRef.addActivity("Failed to launch MacWhisper: \(error)")
                     return
-                }
-                controller.manualRecord(buttonName: buttonName) { result in
-                    Task { @MainActor in
-                        switch result {
-                        case .success:
-                            let platform = Self.platformForButton(buttonName)
-                            stateRef.updateState(.recording(platform: platform))
-                            stateRef.addActivity("Recording started: \(buttonName)")
-                        case .failure(let error):
-                            stateRef.addActivity("Recording failed: \(error)")
+                case .success:
+                    controller.manualRecord(buttonName: buttonName) { result in
+                        Task { @MainActor in
+                            switch result {
+                            case .success:
+                                let platform = Self.platformForButton(buttonName)
+                                stateRef.updateState(.recording(platform: platform))
+                                self.startRecordingObservation()
+                                stateRef.addActivity("Manual record issued: \(buttonName)")
+                            case .failure(let error):
+                                stateRef.addActivity("Recording failed: \(error)")
+                            }
                         }
                     }
                 }
@@ -439,6 +468,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch result {
                 case .success:
                     stateRef.updateState(.idle)
+                    self.stopRecordingObservation()
                     stateRef.addActivity("Recording stopped")
                 case .failure(let error):
                     DetectionLogger.shared.error(.automation, "Stop recording failed: \(error)")
@@ -534,6 +564,74 @@ extension AppDelegate {
                 }
             default:
                 break
+            }
+        }
+    }
+}
+
+// MARK: - Recording Observation (Reality Poll)
+
+extension AppDelegate {
+    /// Start polling MacWhisper for its actual recording state. The poll
+    /// drives `appState.macWhisperObservedRecording`, which is what the UI
+    /// surfaces as "Recording" (vs "Starting..."). Safe to call repeatedly.
+    func startRecordingObservation() {
+        if recordingObservationTimer != nil { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.5, repeating: 2.0, leeway: .milliseconds(500))
+        timer.setEventHandler { [weak self] in
+            self?.pollRecordingObservation()
+        }
+        timer.resume()
+        recordingObservationTimer = timer
+    }
+
+    func stopRecordingObservation() {
+        recordingObservationTimer?.cancel()
+        recordingObservationTimer = nil
+        appState.macWhisperObservedRecording = false
+        appState.macWhisperMenuItemMissing = nil
+    }
+
+    private func pollRecordingObservation() {
+        // Self-stop once intent leaves .recording and there's nothing left
+        // to confirm. Covers paths that transition to .idle/.error without
+        // going through handleStopRecording (e.g. clearError, sleep reset).
+        if case .recording = appState.meetingState {
+            // continue polling
+        } else if !appState.macWhisperObservedRecording {
+            stopRecordingObservation()
+            return
+        }
+
+        let stateRef = appState
+        macWhisperController.checkRecordingStatus { observed in
+            Task { @MainActor in
+                let previous = stateRef.macWhisperObservedRecording
+                if previous == observed { return }
+                stateRef.macWhisperObservedRecording = observed
+                let platform = stateRef.activePlatform
+                if observed {
+                    // false → true: MacWhisper is actually recording now.
+                    if case .recording = stateRef.meetingState {
+                        stateRef.addActivity(
+                            "Recording confirmed" +
+                                (platform.map { " for \($0.displayName)" } ?? ""),
+                            platform: platform
+                        )
+                    }
+                } else {
+                    // true → false: MacWhisper stopped recording. If intent
+                    // is still .recording, that means MacWhisper was stopped
+                    // externally (user pressed Finish, or MacWhisper crashed).
+                    if case .recording = stateRef.meetingState {
+                        stateRef.addActivity(
+                            "Recording stopped externally", platform: platform
+                        )
+                        stateRef.updateState(.idle)
+                        self.stopRecordingObservation()
+                    }
+                }
             }
         }
     }

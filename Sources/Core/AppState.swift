@@ -10,6 +10,17 @@ final class AppState {
     var permissionsGranted: Bool = false
     var extensionConnected: Bool = false
 
+    /// Whether MacWhisper itself currently shows an active recording row in its
+    /// sidebar. Populated by the 2s polling loop in AppDelegate. Distinct from
+    /// `meetingState == .recording`, which reflects *intent* (we've sent or are
+    /// retrying the start command).
+    var macWhisperObservedRecording: Bool = false
+
+    /// When set, MacWhisper's "Record Meeting" submenu does not contain a menu
+    /// item matching the platform's expected title (subtle rename detected).
+    /// Surface via the status bar alert overlay and a popover warning row.
+    var macWhisperMenuItemMissing: Platform?
+
     // Version tracking
     let appVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     var extensionVersion: String?
@@ -27,9 +38,18 @@ final class AppState {
 
     var showOnboarding: Bool { !permissionsGranted }
 
+    /// True only when both *intent* is recording AND MacWhisper's sidebar
+    /// confirms an active recording row. Prevents the UI from claiming
+    /// "Recording" while the AX start command is still retrying.
     var isRecording: Bool {
-        if case .recording = meetingState { return true }
-        return false
+        guard case .recording = meetingState else { return false }
+        return macWhisperObservedRecording
+    }
+
+    /// Intent says we should be recording, but MacWhisper hasn't confirmed yet.
+    var isStartingRecording: Bool {
+        guard case .recording = meetingState else { return false }
+        return !macWhisperObservedRecording
     }
 
     var isDetecting: Bool {
@@ -53,7 +73,10 @@ final class AppState {
         switch meetingState {
         case .idle: "Idle - No meeting detected"
         case .detecting(let platform, _): "Detecting \(platform.displayName)..."
-        case .recording(let platform): "Recording \(platform.displayName)"
+        case .recording(let platform):
+            macWhisperObservedRecording
+                ? "Recording \(platform.displayName)"
+                : "Starting \(platform.displayName)..."
         case .error(let kind): "Error: \(kind.userDescription)"
         }
     }
@@ -80,6 +103,10 @@ final class AppState {
             currentPlatform = platform
         case .idle:
             currentPlatform = nil
+            // Drop stale observation when we leave any recording intent.
+            macWhisperObservedRecording = false
+        case .error:
+            macWhisperObservedRecording = false
         default:
             break
         }

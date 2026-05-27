@@ -2,6 +2,7 @@ import Foundation
 
 enum AXError: Error, CustomStringConvertible, Sendable {
     case macWhisperNotRunning
+    case macWhisperNotInstalled
     case elementNotFound(description: String)
     case actionFailed(element: String, action: String, code: Int32)
     case timeout
@@ -10,6 +11,7 @@ enum AXError: Error, CustomStringConvertible, Sendable {
     var description: String {
         switch self {
         case .macWhisperNotRunning: "MacWhisper is not running"
+        case .macWhisperNotInstalled: "MacWhisper is not installed"
         case .elementNotFound(let desc): "Element not found: \(desc)"
         case .actionFailed(let el, let action, let code):
             "Action '\(action)' failed on '\(el)' (code: \(code))"

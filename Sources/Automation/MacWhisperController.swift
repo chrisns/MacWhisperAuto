@@ -50,14 +50,17 @@ final class MacWhisperController: Sendable {
     }
 
     /// Launch MacWhisper if not running (background, no activation).
-    func launchIfNeeded(completion: @escaping @Sendable (Bool) -> Void) {
+    /// Returns `.macWhisperNotInstalled` when MacWhisper isn't installed at all,
+    /// `.macWhisperNotRunning` when launch was attempted but the app didn't
+    /// become accessible within the wait window (transient — caller can retry).
+    func launchIfNeeded(completion: @escaping @Sendable (Result<Void, AXError>) -> Void) {
         if findMacWhisperApp() != nil {
-            completion(true)
+            completion(.success(()))
             return
         }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
             DetectionLogger.shared.error(.automation, "MacWhisper not installed")
-            completion(false)
+            completion(.failure(.macWhisperNotInstalled))
             return
         }
         let config = NSWorkspace.OpenConfiguration()
@@ -67,26 +70,31 @@ final class MacWhisperController: Sendable {
                 DetectionLogger.shared.error(
                     .automation, "Failed to launch MacWhisper: \(error.localizedDescription)"
                 )
-                completion(false)
+                completion(.failure(.macWhisperNotRunning))
                 return
             }
             // Wait for MacWhisper to become accessible
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                completion(self.findMacWhisperApp() != nil)
+                if self.findMacWhisperApp() != nil {
+                    completion(.success(()))
+                } else {
+                    completion(.failure(.macWhisperNotRunning))
+                }
             }
         }
     }
 
     /// Launch MacWhisper in background on app startup so it's ready when needed.
     func launchInBackground() {
-        launchIfNeeded { launched in
-            if launched {
+        launchIfNeeded { result in
+            switch result {
+            case .success:
                 DetectionLogger.shared.automation(
                     "MacWhisper launched at startup", action: "launchBackground"
                 )
-            } else {
+            case .failure(let error):
                 DetectionLogger.shared.error(
-                    .automation, "Failed to launch MacWhisper at startup"
+                    .automation, "Failed to launch MacWhisper at startup: \(error)"
                 )
             }
         }
@@ -110,15 +118,17 @@ final class MacWhisperController: Sendable {
             )
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
-            self.launchIfNeeded { launched in
-                if launched {
+            self.launchIfNeeded { result in
+                switch result {
+                case .success:
                     DetectionLogger.shared.automation(
                         "MacWhisper relaunched successfully", action: "forceQuitRelaunch"
                     )
-                } else {
-                    DetectionLogger.shared.error(.automation, "MacWhisper relaunch failed")
+                    completion(true)
+                case .failure(let error):
+                    DetectionLogger.shared.error(.automation, "MacWhisper relaunch failed: \(error)")
+                    completion(false)
                 }
-                completion(launched)
             }
         }
     }
@@ -178,11 +188,18 @@ final class MacWhisperController: Sendable {
         }
         Thread.sleep(forTimeInterval: 0.3)
 
-        guard let recordMeeting = AccessibilityHelper.findMenuItemByTitle(
+        guard let recordMeeting = AccessibilityHelper.findMenuItemByFuzzyTitle(
             menuExtra, title: "Record Meeting"
         ) else {
+            let seen = AccessibilityHelper.enumerateMenuItemTitles(menuExtra)
+            DetectionLogger.shared.error(
+                .automation,
+                "'Record Meeting' menu item not found. Top-level items: \(seen.joined(separator: ", "))"
+            )
             AXUIElementPerformAction(menuExtra, kAXCancelAction as CFString)
-            return .failure(.elementNotFound(description: "Record Meeting"))
+            return .failure(.elementNotFound(
+                description: "Record Meeting (saw: \(seen.joined(separator: ", ")))"
+            ))
         }
 
         DetectionLogger.shared.automation(
@@ -197,11 +214,18 @@ final class MacWhisperController: Sendable {
         }
         Thread.sleep(forTimeInterval: 0.3)
 
-        guard let platformItem = AccessibilityHelper.findMenuItemByTitle(
+        guard let platformItem = AccessibilityHelper.findMenuItemByFuzzyTitle(
             recordMeeting, title: menuTitle
         ) else {
+            let seen = AccessibilityHelper.enumerateMenuItemTitles(recordMeeting)
+            DetectionLogger.shared.error(
+                .automation,
+                "'\(menuTitle)' menu item not found under Record Meeting. Submenu items: \(seen.joined(separator: ", "))"
+            )
             AXUIElementPerformAction(menuExtra, kAXCancelAction as CFString)
-            return .failure(.elementNotFound(description: menuTitle))
+            return .failure(.elementNotFound(
+                description: "\(menuTitle) (Record Meeting submenu has: \(seen.joined(separator: ", ")))"
+            ))
         }
 
         DetectionLogger.shared.automation(
@@ -251,46 +275,6 @@ final class MacWhisperController: Sendable {
             }
             return .failure(.elementNotFound(description: buttonName))
         }
-    }
-
-    /// FaceTime fallback: use "Record All System Audio" or "All System Audio".
-    private func performStartFaceTimeRecording(
-        appElement: AXUIElement
-    ) -> Result<Void, AXError> {
-        DetectionLogger.shared.automation(
-            "FaceTime: navigating to All System Audio fallback", action: "startRecording"
-        )
-
-        let windows = AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute)
-        for window in windows {
-            if let button = AccessibilityHelper.findByDescription(
-                window, description: "Record All System Audio"
-            ) {
-                let result = AccessibilityHelper.press(button)
-                if case .success = result {
-                    DetectionLogger.shared.automation(
-                        "Recording started for FaceTime (All System Audio)",
-                        action: "startRecording"
-                    )
-                }
-                return result
-            }
-            if let button = AccessibilityHelper.findByDescription(
-                window, description: "All System Audio"
-            ) {
-                let result = AccessibilityHelper.press(button)
-                if case .success = result {
-                    DetectionLogger.shared.automation(
-                        "Recording started for FaceTime (All System Audio)",
-                        action: "startRecording"
-                    )
-                }
-                return result
-            }
-        }
-        return .failure(
-            .elementNotFound(description: "Record All System Audio / All System Audio")
-        )
     }
 
     /// Stop recording — press "Finish" on an existing finish-recording dialog,

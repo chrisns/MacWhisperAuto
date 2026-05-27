@@ -13,6 +13,11 @@ struct StatusMenuView: View {
 
             Divider()
 
+            if let missingPlatform = appState.macWhisperMenuItemMissing {
+                menuMismatchWarning(platform: missingPlatform)
+                Divider()
+            }
+
             if case .error(let errorKind) = appState.meetingState {
                 ErrorView(
                     errorKind: errorKind,
@@ -22,10 +27,8 @@ struct StatusMenuView: View {
                 Divider()
             }
 
-            if appState.isRecording {
-                if case .recording(let platform) = appState.meetingState {
-                    recordingInfo(platform: platform)
-                }
+            if case .recording(let platform) = appState.meetingState {
+                recordingInfo(platform: platform)
                 stopButton
                 Divider()
             } else {
@@ -72,10 +75,17 @@ struct StatusMenuView: View {
                 .foregroundStyle(.orange)
                 .symbolEffect(.pulse)
         case .recording:
-            Image(systemName: "record.circle.fill")
-                .font(.title)
-                .foregroundStyle(.red)
-                .symbolEffect(.pulse)
+            if appState.macWhisperObservedRecording {
+                Image(systemName: "record.circle.fill")
+                    .font(.title)
+                    .foregroundStyle(.red)
+                    .symbolEffect(.pulse)
+            } else {
+                Image(systemName: "record.circle")
+                    .font(.title)
+                    .foregroundStyle(.orange)
+                    .symbolEffect(.pulse)
+            }
         case .error:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.title)
@@ -84,12 +94,13 @@ struct StatusMenuView: View {
     }
 
     private func recordingInfo(platform: Platform) -> some View {
-        HStack {
-            Image(systemName: "record.circle.fill")
-                .foregroundStyle(.red)
+        let confirmed = appState.macWhisperObservedRecording
+        return HStack {
+            Image(systemName: confirmed ? "record.circle.fill" : "record.circle")
+                .foregroundStyle(confirmed ? .red : .orange)
                 .symbolEffect(.pulse)
             VStack(alignment: .leading) {
-                Text("Recording")
+                Text(confirmed ? "Recording" : "Starting...")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(platform.displayName)
@@ -99,8 +110,26 @@ struct StatusMenuView: View {
             Spacer()
         }
         .padding(8)
-        .background(.red.opacity(0.1))
+        .background((confirmed ? Color.red : Color.orange).opacity(0.1))
         .cornerRadius(8)
+    }
+
+    private func menuMismatchWarning(platform: Platform) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("MacWhisper menu may have changed")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Text("Couldn't find a '\(platform.displayName)' item under Record Meeting. See logs for the titles MacWhisper is exposing.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .background(.yellow.opacity(0.1))
+        .cornerRadius(6)
     }
 
     private static let manualTargets: [(label: String, button: String)] = [
