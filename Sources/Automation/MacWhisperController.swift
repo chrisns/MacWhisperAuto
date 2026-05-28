@@ -171,26 +171,20 @@ final class MacWhisperController: Sendable {
         case .failure(let error):
             return .failure(error)
         case .success(let appElement):
-            // Pre-check: if MacWhisper is already recording (user started it
-            // manually, or a previous attempt succeeded), don't try to start a
-            // second recording — that's how we end up with duplicate files.
-            if performCheckRecording() {
-                DetectionLogger.shared.automation(
-                    "MacWhisper is already recording — treating start as no-op",
-                    action: "startRecording"
-                )
-                return .success(())
-            }
+            // No upfront `performCheckRecording` pre-check here — MacWhisper's
+            // menu extra sometimes shows a stale "Stop Recording" item after a
+            // stop, making the menu-only check a false positive. The in-window
+            // Stop button (`pressWindowRecordButton`) is the ground truth and
+            // we check it just before pressing the in-window Record button.
             if let menuTitle = platform.macWhisperMenuTitle {
                 let menuResult = performStartRecordingViaMenu(
                     appElement: appElement, menuTitle: menuTitle, platform: platform
                 )
                 if case .success = menuResult { return menuResult }
 
-                // Final fallback: in-window "Record <Platform>" button by AXDescription.
-                // Exists in MacWhisper's main window regardless of MacWhisper's own
-                // meeting detection state, so this catches the case where our
-                // detector fired but MacWhisper's didn't.
+                // Final fallback: in-window "Record <Platform>" button by
+                // AXDescription. Exists in MacWhisper's main window regardless
+                // of MacWhisper's own meeting detection state.
                 if let buttonDesc = Self.windowButtonDescription[platform] {
                     if let result = pressWindowRecordButton(
                         appElement: appElement, description: buttonDesc, platform: platform
@@ -204,9 +198,12 @@ final class MacWhisperController: Sendable {
         }
     }
 
-    /// Press the in-window "Record <Platform>" button by AXDescription.
-    /// Returns `nil` when the button isn't present (caller should propagate
-    /// the upstream error). Returns success/failure when the button was found.
+    /// Press the in-window "Record <Platform>" button by AXDescription. Bails
+    /// out (returns success no-op) if the in-window Stop button is also
+    /// present — that's the ground-truth signal that MacWhisper is genuinely
+    /// recording, so pressing Record would start a duplicate.
+    /// Returns `nil` when the Record button isn't present (caller should
+    /// propagate the upstream error).
     private func pressWindowRecordButton(
         appElement: AXUIElement, description: String, platform: Platform
     ) -> Result<Void, AXError>? {
@@ -215,6 +212,13 @@ final class MacWhisperController: Sendable {
             guard let button = AccessibilityHelper.findByDescription(
                 window, description: description
             ) else { continue }
+            if Self.windowHasActiveStopButton(window) {
+                DetectionLogger.shared.automation(
+                    "In-window Stop button present — MacWhisper is genuinely recording, no-op",
+                    action: "startRecording"
+                )
+                return .success(())
+            }
             DetectionLogger.shared.automation(
                 "Falling back to in-window '\(description)' button", action: "startRecording"
             )
@@ -228,6 +232,20 @@ final class MacWhisperController: Sendable {
             return result
         }
         return nil
+    }
+
+    /// Ground-truth check: does this window have an in-progress recording
+    /// Stop button? The button has AXDescription "Stop" and AXHelp
+    /// "Stop the meeting recording". It only exists while MacWhisper is
+    /// actively recording — unlike the menu-extra "Stop Recording" item,
+    /// which can be stale.
+    static func windowHasActiveStopButton(_ window: AXUIElement) -> Bool {
+        guard let button = AccessibilityHelper.findByDescription(
+            window, description: "Stop"
+        ) else { return false }
+        let help: String = AccessibilityHelper.attribute(button, kAXHelpAttribute) ?? ""
+        let lower = help.lowercased()
+        return lower.contains("stop") && lower.contains("recording")
     }
 
     /// Drive the status-menu extra to start recording. MacWhisper has shipped
@@ -373,18 +391,12 @@ final class MacWhisperController: Sendable {
                 return result
             }
 
-            // Try in-window "Stop" button (AXDescription "Stop",
-            // help="Stop the meeting recording") — present on the recording
-            // meta-window in current MacWhisper.
+            // Try in-window "Stop" button — ground truth for active recording.
             let windows = AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute)
-            for window in windows {
+            for window in windows where Self.windowHasActiveStopButton(window) {
                 guard let stopButton = AccessibilityHelper.findByDescription(
                     window, description: "Stop"
                 ) else { continue }
-                let help: String = AccessibilityHelper.attribute(stopButton, kAXHelpAttribute) ?? ""
-                guard help.lowercased().contains("stop") && help.lowercased().contains("recording") else {
-                    continue
-                }
                 DetectionLogger.shared.automation(
                     "Pressing in-window Stop button", action: "stopRecording"
                 )
@@ -469,41 +481,27 @@ final class MacWhisperController: Sendable {
         return result
     }
 
-    /// Check if MacWhisper is currently recording. Prefers a passive read of
-    /// the status-menu extra (no menu open required — no menu-bar flash) and
-    /// falls back to scanning the sidebar.
+    /// Check if MacWhisper is currently recording.
     ///
-    /// In the current MacWhisper, the menu extra contains either a
-    /// "Recording <Platform> Meeting" indicator + a "Stop Recording" action
-    /// when recording is active, or "Record <Platform> Meeting" when idle.
+    /// We require BOTH signals to agree:
+    ///   * Menu extra has "Stop Recording" or a "Recording <Platform> Meeting"
+    ///     item (passive AX read, no menu open).
+    ///   * One of MacWhisper's windows has an in-progress Stop button
+    ///     (AXDescription "Stop", help "Stop the meeting recording").
+    ///
+    /// The menu can be stale (e.g. "Stop Recording" lingers briefly after a
+    /// stop). The in-window Stop button only exists during an actual
+    /// recording. Demanding agreement avoids false positives that previously
+    /// caused our app to say "Recording" while nothing was being captured.
     private func performCheckRecording() -> Bool {
         switch createAppElement() {
         case .failure:
             return false
         case .success(let appElement):
-            // Passive menu-extra read — does not require opening the menu.
-            if let extras: AXUIElement =
-                    AccessibilityHelper.attribute(appElement, kAXExtrasMenuBarAttribute),
-               let menuExtra = AccessibilityHelper.arrayAttribute(
-                    extras, kAXChildrenAttribute
-               ).first {
-                let recordingItem = AccessibilityHelper.findMenuItemMatching(
-                    menuExtra, maxDepth: 4
-                ) { title in
-                    if title == "Stop Recording" { return true }
-                    return title.lowercased().hasPrefix("recording ")
-                }
-                if recordingItem != nil { return true }
-            }
-
-            // Fallback: sidebar scan (legacy MacWhisper layout).
-            let windows = AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute)
-            for window in windows {
-                if findActiveRecordingRow(window) != nil {
-                    return true
-                }
-            }
-            return false
+            let menuSays = menuExtraShowsRecording(appElement)
+            let windowSays = anyWindowHasActiveStopButton(appElement)
+            return menuSays && windowSays
         }
     }
+
 }
