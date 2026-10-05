@@ -1,7 +1,7 @@
 import Foundation
 
 enum Platform: String, CaseIterable, Sendable {
-    case teams, zoom, slack, faceTime, chime, browser
+    case teams, zoom, slack, faceTime, chime, browser, chrome
 
     /// Title of the platform's item under MacWhisper's status-menu "Record Meeting" submenu.
     /// `nil` means the platform is not exposed in the menu and must use a window-based fallback.
@@ -12,6 +12,7 @@ enum Platform: String, CaseIterable, Sendable {
         case .slack: "Slack"
         case .chime: "Chime"
         case .browser: "Comet"
+        case .chrome: "Chrome"
         case .faceTime: nil
         }
     }
@@ -23,7 +24,8 @@ enum Platform: String, CaseIterable, Sendable {
         case .slack: "Slack"
         case .faceTime: "FaceTime"
         case .chime: "Amazon Chime"
-        case .browser: "Browser"
+        case .browser: "Comet"
+        case .chrome: "Chrome"
         }
     }
 
@@ -35,7 +37,9 @@ enum Platform: String, CaseIterable, Sendable {
         case .slack: ["com.tinyspeck.slackmacgap"]
         case .faceTime: ["com.apple.FaceTime"]
         case .chime: ["com.amazon.Amazon-Chime"]
-        case .browser: [] // browser detection is via WebSocket extension, not NSWorkspace
+        // Browser detection is via the WebSocket extension, not NSWorkspace.
+        // Must stay empty: a bundle ID here would treat any open browser as a meeting.
+        case .browser, .chrome: []
         }
     }
 

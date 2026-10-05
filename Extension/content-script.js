@@ -120,10 +120,12 @@ const PLATFORM_DETECTORS = {
 // --- State ---
 
 let currentPlatform = null;
+let currentCustomRule = null; // set when the page matched a user-defined rule (platform 'custom')
 let lastReportedActive = null;
 let mutationDebounceTimer = null;
 let periodicCheckTimer = null;
 let observer = null;
+let titleObserver = null;
 let consecutiveInactiveChecks = 0;
 const INACTIVE_THRESHOLD = 3; // Require 3 consecutive inactive checks (~9s) before reporting ended
 
@@ -140,6 +142,7 @@ function teardown() {
   if (periodicCheckTimer) { clearInterval(periodicCheckTimer); periodicCheckTimer = null; }
   if (mutationDebounceTimer) { clearTimeout(mutationDebounceTimer); mutationDebounceTimer = null; }
   if (observer) { observer.disconnect(); observer = null; }
+  if (titleObserver) { titleObserver.disconnect(); titleObserver = null; }
 }
 
 // --- Platform Detection ---
@@ -157,6 +160,8 @@ function detectPlatform() {
 // --- Meeting Check ---
 
 function checkMeetingActive(platform) {
+  if (platform === 'custom') return customRuleIsActive(currentCustomRule, document.title);
+
   const detector = PLATFORM_DETECTORS[platform];
   if (!detector) return false;
 
@@ -169,6 +174,12 @@ function checkMeetingActive(platform) {
 }
 
 // --- Reporting ---
+
+// Extra fields for user-defined rules: which MacWhisper source to record.
+function customFields() {
+  // Empty source means auto: the app works out the browser from the connection
+  return currentCustomRule?.source ? { macwhisper_source: currentCustomRule.source } : {};
+}
 
 function reportMeetingStatus(platform, isActive) {
   if (isActive) {
@@ -188,7 +199,8 @@ function reportMeetingStatus(platform, isActive) {
     platform,
     url: location.href,
     title: document.title,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    ...customFields()
   };
 
   log(isActive ? 'Meeting detected:' : 'Meeting ended:', platform);
@@ -224,7 +236,8 @@ function sendPeriodicStatus(platform) {
     is_active: reportActive,
     url: location.href,
     title: document.title,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    ...customFields()
   };
 
   if (!isContextValid()) { teardown(); return; }
@@ -252,14 +265,23 @@ function onDomMutation() {
 
 // --- Initialization ---
 
-function init() {
+async function init() {
   currentPlatform = detectPlatform();
+  if (!currentPlatform) {
+    // Fall back to user-defined rules from the options page
+    try {
+      currentCustomRule = findCustomRule(await loadCustomRules(), location.href);
+    } catch (err) {
+      warn('Failed to load custom rules:', err.message);
+    }
+    if (currentCustomRule) currentPlatform = 'custom';
+  }
   if (!currentPlatform) {
     log('No matching meeting platform detected for URL:', location.href);
     return;
   }
 
-  log(`Platform detected: ${currentPlatform}`);
+  log(`Platform detected: ${currentPlatform}`, currentCustomRule ? `(rule: ${currentCustomRule.name || currentCustomRule.pattern})` : '');
 
   // MutationObserver for dynamic DOM changes
   observer = new MutationObserver(onDomMutation);
@@ -269,6 +291,12 @@ function init() {
     attributes: true,
     attributeFilter: ['class', 'style', 'aria-label', 'data-meeting-code', 'data-is-muted', 'data-tid']
   });
+
+  // Custom rules key off document.title, which lives in <head>
+  if (currentCustomRule && document.head) {
+    titleObserver = new MutationObserver(onDomMutation);
+    titleObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+  }
 
   // Periodic full-state report (heartbeat-style, so service worker recovers after restart)
   periodicCheckTimer = setInterval(() => {

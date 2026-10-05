@@ -3,13 +3,17 @@
   "name": "MacWhisperAuto Meeting Detector",
   "version": "1.0.0",
   "description": "Detects browser-based meetings for MacWhisperAuto",
-  "permissions": ["tabs", "storage", "alarms"],
+  "permissions": ["tabs", "storage", "alarms", "scripting"],
   "host_permissions": [
     "https://meet.google.com/*",
     "https://teams.microsoft.com/*",
     "https://*.zoom.us/*",
     "https://app.slack.com/*",
     "https://app.chime.aws/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -24,10 +28,14 @@
         "https://app.slack.com/*",
         "https://app.chime.aws/*"
       ],
-      "js": ["content-script.js"],
+      "js": ["rules.js", "content-script.js"],
       "run_at": "document_idle"
     }
   ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

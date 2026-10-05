@@ -61,11 +61,13 @@ A single `CGWindowListCopyWindowInfo` call per 3-second cycle (completes in unde
 
 A Chromium MV3 extension injects content scripts into meeting pages. The content scripts inspect the DOM for platform-specific indicators (mute buttons, call controls, participant lists) and report to the service worker, which maintains a WebSocket connection to `ws://127.0.0.1:8765`. The host app receives heartbeats every 20 seconds with the full list of active meetings. Supported web platforms: Google Meet, Teams Web, Zoom Web, Slack Web, Chime Web.
 
+You can also add your own sites. See [Custom sites](#custom-sites).
+
 ## How Recording Works (Cross-Process Accessibility API)
 
 MacWhisper has no AppleScript dictionary, no CLI, and no usable URL scheme. MacWhisperAuto controls it externally via the macOS Accessibility API:
 
-1. **Start recording**: Finds the platform-specific "Record [Platform]" button in MacWhisper's main window via AX tree traversal and presses it
+1. **Start recording**: Opens MacWhisper's status menu and presses **Record Meeting** > [Platform]. If that fails, it presses the platform-specific "Record [Platform]" button in MacWhisper's main window. FaceTime and the manual **System** button use **App Audio** > **All System Audio** > **Start Recording**
 2. **Stop recording**: Finds the active recording in MacWhisper's sidebar, triggers the "Finish Recording" confirmation dialog, and presses the "Finish" button
 3. **Check recording status**: Looks for an active recording row in the sidebar under "Active Recordings"
 4. **Launch**: Starts MacWhisper via `NSWorkspace` in the background at app startup so it's ready when a meeting is detected
@@ -78,8 +80,10 @@ All AX automation runs on a dedicated serial dispatch queue to avoid blocking th
 
 ```
 Extension/                  # MV3 Chromium browser extension
-  background.js             # Service worker: WebSocket client, tab tracking
-  content-script.js         # DOM-based meeting detection per platform
+  background.js             # Service worker: WebSocket client, tab tracking, custom-site registration
+  content-script.js         # DOM-based meeting detection per platform, title check for custom sites
+  rules.js                  # Shared custom-site rule helpers (match patterns, storage)
+  options.html, options.js  # Options page to edit custom sites
   manifest.json
 
 Sources/
@@ -170,6 +174,26 @@ The debug binary will be at `.build/debug/MacWhisperAuto` but won't have the `.a
 
 The extension is only needed for browser-based meetings (primarily Google Meet). Native app detection works without it.
 
+### Custom sites
+
+You can add your own meeting sites. These rules stay in your browser's local extension storage. They are not part of the built-in list.
+
+1. Open `chrome://extensions`, find **MacWhisperAuto Meeting Detector**, and click **Details** > **Extension options**.
+2. Click **Add site**.
+3. Type a URL pattern, for example `https://*.example.com`. A pattern without a path gets `/*`. `*.example.com` matches `example.com` and all of its subdomains.
+4. Type the title text, for example `in call`. The check is not case-sensitive.
+5. Keep the MacWhisper source at **Auto**. MacWhisperAuto then records the browser that the meeting is in. Select **Comet** or **Chrome** only to override this.
+6. Click **Save**, and allow access to the site when the browser asks.
+7. Reload any open tab for the site.
+
+Recording starts while the page title contains the text. Recording stops when the title no longer contains it. The stop comes about 45 to 60 seconds later, because of the extension's inactive checks, the heartbeat grace period and the stop grace period.
+
+Built-in sites keep their own detection. A custom rule for a built-in site has no effect.
+
+### Which browser is recorded
+
+The app finds the process that owns each extension connection, for example `Google Chrome Helper` inside `Google Chrome.app`. A meeting in Chrome presses **Record Meeting** > **Chrome** in MacWhisper. A meeting in Comet presses **Record Meeting** > **Comet**. This applies to built-in sites and custom sites. Other browsers fall back to Comet.
+
 ## Permissions
 
 MacWhisperAuto needs two macOS permissions. On first launch, an onboarding screen guides you through granting them.
@@ -195,7 +219,7 @@ Logs are written to two destinations:
 
 ## Configuration
 
-There is no configuration UI or config file. Thresholds and intervals are compile-time constants:
+The only configuration UI is the extension's custom sites page. There is no config file for the app. Thresholds and intervals are compile-time constants:
 
 | Parameter | Value | Location |
 |---|---|---|

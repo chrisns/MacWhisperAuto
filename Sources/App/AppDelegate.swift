@@ -131,8 +131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         extensionMessageHandler = messageHandler
 
         let wsServer = WebSocketServer()
-        wsServer.onMessage = { [weak messageHandler] data in
-            messageHandler?.handleMessage(data)
+        wsServer.onMessage = { [weak messageHandler] data, browserName in
+            messageHandler?.handleMessage(data, browserName: browserName)
         }
         wsServer.onClientConnected = { [weak messageHandler] in
             messageHandler?.onConnectionStateChanged(true)
@@ -442,7 +442,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "Record Teams": .teams
         case "Record Zoom": .zoom
         case "Record Slack": .slack
-        case "Record Comet", "Record Chrome": .browser
+        case "Record Comet": .browser
+        case "Record Chrome": .chrome
         case "Record Chime": .chime
         default: .browser
         }
@@ -643,6 +644,16 @@ extension AppDelegate {
     func registerLoginItem() {
         if #available(macOS 13.0, *) {
             let service = SMAppService.mainApp
+            // A bare `swift build` binary is a dev run: never make it a login
+            // item (it would start alongside the installed app), and clear
+            // any item an earlier dev run left behind.
+            guard Bundle.main.bundleURL.pathExtension == "app" else {
+                if service.status == .enabled {
+                    try? service.unregister()
+                    DetectionLogger.shared.lifecycle("Removed login item for unbundled dev build")
+                }
+                return
+            }
             if service.status != .enabled {
                 do {
                     try service.register()
