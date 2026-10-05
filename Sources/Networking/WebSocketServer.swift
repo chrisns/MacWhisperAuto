@@ -12,8 +12,12 @@ final class WebSocketServer: @unchecked Sendable {
     // Active connections (thread-safe)
     private let _connections = OSAllocatedUnfairLock(initialState: [NWConnection]())
 
+    /// Browser app name per connection (e.g. "Comet", "Google Chrome"), resolved once on connect.
+    private let _browserNames = OSAllocatedUnfairLock(initialState: [ObjectIdentifier: String]())
+
     // Callbacks
-    var onMessage: (@Sendable (Data) -> Void)?
+    /// Message data plus the name of the browser app that sent it, when known.
+    var onMessage: (@Sendable (Data, String?) -> Void)?
     var onClientConnected: (@Sendable () -> Void)?
     var onClientDisconnected: (@Sendable () -> Void)?
     var onError: (@Sendable (ErrorKind) -> Void)?
@@ -86,6 +90,7 @@ final class WebSocketServer: @unchecked Sendable {
                 DetectionLogger.shared.webSocket("Client connected")
                 self?.onClientConnected?()
                 if let connection {
+                    self?.identifyBrowser(for: connection)
                     self?.receiveMessages(on: connection)
                 }
             case .failed(let error):
@@ -120,7 +125,7 @@ final class WebSocketServer: @unchecked Sendable {
                 if let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata {
                     switch metadata.opcode {
                     case .text, .binary:
-                        self?.onMessage?(content)
+                        self?.onMessage?(content, self?.browserName(for: connection))
                     case .close:
                         connection?.cancel()
                         return
@@ -129,7 +134,7 @@ final class WebSocketServer: @unchecked Sendable {
                     }
                 } else {
                     // No WebSocket metadata, treat as raw data
-                    self?.onMessage?(content)
+                    self?.onMessage?(content, self?.browserName(for: connection))
                 }
             }
 
@@ -144,5 +149,23 @@ final class WebSocketServer: @unchecked Sendable {
         _connections.withLock { conns in
             conns.removeAll { $0 === connection }
         }
+        _browserNames.withLock { _ = $0.removeValue(forKey: ObjectIdentifier(connection)) }
+    }
+
+    /// Find which browser owns the client end of this connection (runs on serverQueue,
+    /// before the first message is received).
+    private func identifyBrowser(for connection: NWConnection) {
+        guard case .hostPort(_, let clientPort) = connection.endpoint,
+              let name = BrowserIdentifier.appName(clientPort: clientPort.rawValue, serverPort: port) else {
+            DetectionLogger.shared.webSocket("Could not identify browser for connection \(connection.endpoint)")
+            return
+        }
+        _browserNames.withLock { $0[ObjectIdentifier(connection)] = name }
+        DetectionLogger.shared.webSocket("Connection \(connection.endpoint) is from \(name)")
+    }
+
+    private func browserName(for connection: NWConnection?) -> String? {
+        guard let connection else { return nil }
+        return _browserNames.withLock { $0[ObjectIdentifier(connection)] }
     }
 }

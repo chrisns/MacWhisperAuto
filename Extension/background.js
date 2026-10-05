@@ -1,11 +1,14 @@
 // background.js - MV3 Service Worker for MacWhisperAuto Meeting Detection
 
+importScripts('rules.js');
+
 const LOG_PREFIX = '[MacWhisperAuto]';
 const WEBSOCKET_URL = 'ws://127.0.0.1:8765';
 const KEEPALIVE_INTERVAL_MS = 20000;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 const EXTENSION_VERSION = '1.0.0';
+const CUSTOM_SCRIPT_ID = 'custom-rules';
 
 const MEETING_PATTERNS = {
   google_meet: /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/,
@@ -17,8 +20,11 @@ const MEETING_PATTERNS = {
 
 // --- State ---
 
-// Map<tabId, { platform, url, title, detected_at }>
+// Map<tabId, { platform, url, title, detected_at, macwhisper_source? }>
 const activeMeetings = new Map();
+
+// User-defined rules from the options page (see rules.js)
+let customRules = [];
 
 let ws = null;
 let reconnectAttempts = 0;
@@ -45,8 +51,67 @@ function matchPlatform(url) {
   for (const [platform, pattern] of Object.entries(MEETING_PATTERNS)) {
     if (pattern.test(url)) return platform;
   }
+  if (findCustomRule(customRules, url)) return 'custom';
   return null;
 }
+
+// --- Custom Rules ---
+
+async function refreshCustomRules() {
+  try {
+    customRules = await loadCustomRules();
+  } catch (err) {
+    warn('Failed to load custom rules:', err.message);
+    customRules = [];
+  }
+}
+
+// Register the content script for every custom rule whose origin the user granted.
+// Built-in sites are excluded so a page never gets the content script twice.
+async function syncCustomContentScripts() {
+  const matches = [];
+  for (const rule of customRules) {
+    const pattern = normalizePattern(rule.pattern);
+    const origin = patternOrigin(pattern);
+    if (!pattern || !origin || matches.includes(pattern)) continue;
+    if (await chrome.permissions.contains({ origins: [origin] })) {
+      matches.push(pattern);
+    } else {
+      warn(`No host permission for custom rule ${pattern}, open the options page to grant it`);
+    }
+  }
+
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [CUSTOM_SCRIPT_ID] });
+    if (existing.length > 0) {
+      await chrome.scripting.unregisterContentScripts({ ids: [CUSTOM_SCRIPT_ID] });
+    }
+    if (matches.length > 0) {
+      await chrome.scripting.registerContentScripts([{
+        id: CUSTOM_SCRIPT_ID,
+        matches,
+        excludeMatches: chrome.runtime.getManifest().content_scripts.flatMap((cs) => cs.matches),
+        js: ['rules.js', 'content-script.js'],
+        runAt: 'document_idle',
+        persistAcrossSessions: true
+      }]);
+    }
+    log(`Custom content scripts registered for: ${matches.join(', ') || '(none)'}`);
+  } catch (err) {
+    error('Failed to register custom content scripts:', err.message);
+  }
+}
+
+async function reloadCustomRules() {
+  await refreshCustomRules();
+  await syncCustomContentScripts();
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes[customRulesKey()]) reloadCustomRules();
+});
+chrome.permissions.onAdded.addListener(() => syncCustomContentScripts());
+chrome.permissions.onRemoved.addListener(() => syncCustomContentScripts());
 
 // --- WebSocket ---
 
@@ -136,7 +201,8 @@ function sendHeartbeat() {
       platform: info.platform,
       url: info.url,
       title: info.title,
-      detected_at: info.detected_at
+      detected_at: info.detected_at,
+      ...sourceField(info.macwhisper_source)
     });
   }
 
@@ -177,7 +243,8 @@ async function restoreMeetings() {
             url: tab.url,
             title: tab.title || info.title,
             detected_at: info.detected_at,
-            last_confirmed: Date.now()
+            last_confirmed: Date.now(),
+            macwhisper_source: info.macwhisper_source
           });
           log(`Restored meeting: ${info.platform} in tab ${id}`);
         }
@@ -193,12 +260,18 @@ async function restoreMeetings() {
 
 // --- Meeting State ---
 
-function addMeeting(tabId, platform, url, title) {
+// Only custom rules carry a MacWhisper source; built-in sites leave it to the app.
+function sourceField(source) {
+  return source ? { macwhisper_source: source } : {};
+}
+
+function addMeeting(tabId, platform, url, title, source) {
   const existing = activeMeetings.get(tabId);
   if (existing && existing.platform === platform) {
     // Update title/url and refresh confirmation timestamp
     existing.url = url;
     existing.title = title;
+    existing.macwhisper_source = source;
     existing.last_confirmed = Date.now();
     persistMeetings();
     return;
@@ -210,7 +283,8 @@ function addMeeting(tabId, platform, url, title) {
     url,
     title,
     detected_at: now,
-    last_confirmed: Date.now()
+    last_confirmed: Date.now(),
+    macwhisper_source: source
   });
 
   log(`Meeting detected: ${platform} in tab ${tabId} - ${title}`);
@@ -222,7 +296,8 @@ function addMeeting(tabId, platform, url, title) {
     platform,
     url,
     title,
-    timestamp: now
+    timestamp: now,
+    ...sourceField(source)
   });
 }
 
@@ -251,15 +326,17 @@ function removeMeeting(tabId, force = false) {
     platform: meeting.platform,
     url: meeting.url,
     title: meeting.title,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    ...sourceField(meeting.macwhisper_source)
   });
 }
 
 // --- Tab Events ---
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   // Only act on URL changes or completion
   if (!changeInfo.url && changeInfo.status !== 'complete') return;
+  await customRulesReady;
 
   const url = changeInfo.url || tab.url;
   const platform = matchPlatform(url);
@@ -294,7 +371,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   switch (message.type) {
     case 'meeting_detected': {
-      addMeeting(tabId, message.platform, message.url, message.title);
+      addMeeting(tabId, message.platform, message.url, message.title, message.macwhisper_source);
       sendResponse({ ok: true });
       break;
     }
@@ -306,7 +383,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'meeting_status': {
       // Content script reporting periodic status
       if (message.is_active) {
-        addMeeting(tabId, message.platform, message.url, message.title);
+        addMeeting(tabId, message.platform, message.url, message.title, message.macwhisper_source);
       } else {
         removeMeeting(tabId);
       }
@@ -352,7 +429,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 log('Service worker starting, version', EXTENSION_VERSION);
 
-// Restore state from storage (FR35), then connect and send heartbeat
-restoreMeetings().then(() => {
+// Load custom rules first so matchPlatform() knows them, then restore state
+// from storage (FR35), then connect and send heartbeat
+const customRulesReady = reloadCustomRules();
+customRulesReady.then(restoreMeetings).then(() => {
   connectWebSocket();
 });

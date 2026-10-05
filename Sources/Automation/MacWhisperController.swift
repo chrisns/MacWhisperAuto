@@ -31,7 +31,8 @@ final class MacWhisperController: Sendable {
         .zoom: "Record Zoom",
         .slack: "Record Slack",
         .chime: "Record Chime",
-        .browser: "Record Comet"
+        .browser: "Record Comet",
+        .chrome: "Record Chrome"
     ]
 
     /// Manual recording by raw button name (e.g. "Record Chrome", "Record All System Audio").
@@ -165,7 +166,7 @@ final class MacWhisperController: Sendable {
     ///   2. Legacy "Record Meeting > <Platform>" submenu
     ///   3. In-window per-platform Record button (AXDescription "Record <Platform>")
     /// FaceTime has no platform-specific entry — it falls through to a
-    /// window-based "Record All System Audio" fallback (in the +FaceTime extension).
+    /// window-based All System Audio recording (in the +FaceTime extension).
     private func performStartRecording(platform: Platform) -> Result<Void, AXError> {
         switch createAppElement() {
         case .failure(let error):
@@ -194,7 +195,7 @@ final class MacWhisperController: Sendable {
                 }
                 return menuResult
             }
-            return performStartFaceTimeRecording(appElement: appElement)
+            return performStartSystemAudioRecording(appElement: appElement)
         }
     }
 
@@ -235,28 +236,52 @@ final class MacWhisperController: Sendable {
     }
 
     /// Ground-truth check: does this window have an in-progress recording
-    /// Stop button? The button has AXDescription "Stop" and AXHelp
-    /// "Stop the meeting recording". It only exists while MacWhisper is
-    /// actively recording — unlike the menu-extra "Stop Recording" item,
-    /// which can be stale.
+    /// Stop button? It only exists while MacWhisper is actively recording —
+    /// unlike the menu-extra "Stop Recording" item, which can be stale.
     static func windowHasActiveStopButton(_ window: AXUIElement) -> Bool {
+        activeStopButton(in: window) != nil
+    }
+
+    /// 15.3+ in-progress recording controls; each exists only while recording.
+    static func recordingControlButton(in window: AXUIElement) -> AXUIElement? {
+        for description in ["End Meeting", "Stop Recording"] {
+            if let button = AccessibilityHelper.findByDescription(
+                window, description: description, maxDepth: 12
+            ) {
+                return button
+            }
+        }
+        return nil
+    }
+
+    /// The control that ends the in-progress recording in this window:
+    ///   * 15.3+ meeting: a per-meeting window ("Meeting - Comet") with an
+    ///     "End Meeting" button, which exists only while recording.
+    ///   * 15.3+ App Audio (All System Audio): a "Stop Recording" button in
+    ///     the main window's App Audio Recording view.
+    ///   * Older: a "Stop" button with AXHelp "Stop the meeting recording".
+    static func activeStopButton(in window: AXUIElement) -> AXUIElement? {
+        if let button = recordingControlButton(in: window) {
+            return button
+        }
         guard let button = AccessibilityHelper.findByDescription(
             window, description: "Stop"
-        ) else { return false }
+        ) else { return nil }
         let help: String = AccessibilityHelper.attribute(button, kAXHelpAttribute) ?? ""
         let lower = help.lowercased()
-        return lower.contains("stop") && lower.contains("recording")
+        return lower.contains("stop") && lower.contains("recording") ? button : nil
     }
 
     /// Drive the status-menu extra to start recording. MacWhisper has shipped
     /// two layouts for this menu over time:
     ///
-    /// 1. **Flat (current)** — a single top-level item "Record <Platform> Meeting"
+    /// 1. **Flat** — a single top-level item "Record <Platform> Meeting"
     ///    (e.g. "Record Teams Meeting") sits directly in the menu extra. Only
     ///    one platform's item shows at a time, picked by MacWhisper's own
     ///    meeting detection.
-    /// 2. **Submenu (older)** — a "Record Meeting" item expands to a submenu
-    ///    containing per-platform leaves ("Teams", "Zoom", ...).
+    /// 2. **Submenu** (older builds, and again in 15.3) — a "Record Meeting"
+    ///    item expands to a submenu containing per-platform leaves
+    ///    ("Comet", "Teams", "Slack", "Chime", "Chrome", "Zoom").
     ///
     /// Try the flat layout first, fall back to the submenu layout, then log
     /// the items we actually saw so misses are easy to diagnose.
@@ -354,6 +379,9 @@ final class MacWhisperController: Sendable {
             DetectionLogger.shared.automation(
                 "Manual record: looking for '\(buttonName)'", action: "manualRecord"
             )
+            if buttonName == "Record All System Audio" {
+                return performStartSystemAudioRecording(appElement: appElement)
+            }
 
             let windows = AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute)
             for window in windows {
@@ -391,19 +419,18 @@ final class MacWhisperController: Sendable {
                 return result
             }
 
-            // Try in-window "Stop" button — ground truth for active recording.
+            // Try the in-window "End Meeting" / "Stop" button — ground truth for active recording.
             let windows = AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute)
-            for window in windows where Self.windowHasActiveStopButton(window) {
-                guard let stopButton = AccessibilityHelper.findByDescription(
-                    window, description: "Stop"
-                ) else { continue }
+            for window in windows {
+                guard let stopButton = Self.activeStopButton(in: window) else { continue }
+                let name: String = AccessibilityHelper.attribute(stopButton, kAXDescriptionAttribute) ?? "Stop"
                 DetectionLogger.shared.automation(
-                    "Pressing in-window Stop button", action: "stopRecording"
+                    "Pressing in-window '\(name)' button", action: "stopRecording"
                 )
                 let result = AccessibilityHelper.press(stopButton)
                 if case .success = result {
                     DetectionLogger.shared.automation(
-                        "Recording stopped via in-window Stop", action: "stopRecording"
+                        "Recording stopped via in-window '\(name)'", action: "stopRecording"
                     )
                     return result
                 }
@@ -483,7 +510,11 @@ final class MacWhisperController: Sendable {
 
     /// Check if MacWhisper is currently recording.
     ///
-    /// We require BOTH signals to agree:
+    /// 15.3+: an "End Meeting" or "Stop Recording" button is enough on its
+    /// own — each exists only while recording, and the menu extra no longer
+    /// shows any recording item.
+    ///
+    /// Older builds: require BOTH signals to agree:
     ///   * Menu extra has "Stop Recording" or a "Recording <Platform> Meeting"
     ///     item (passive AX read, no menu open).
     ///   * One of MacWhisper's windows has an in-progress Stop button
@@ -498,6 +529,7 @@ final class MacWhisperController: Sendable {
         case .failure:
             return false
         case .success(let appElement):
+            if anyWindowHasRecordingControl(appElement) { return true }
             let menuSays = menuExtraShowsRecording(appElement)
             let windowSays = anyWindowHasActiveStopButton(appElement)
             return menuSays && windowSays

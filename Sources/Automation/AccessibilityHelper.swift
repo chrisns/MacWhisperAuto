@@ -54,6 +54,28 @@ enum AccessibilityHelper {
         return nil
     }
 
+    /// Recursive tree search for an element whose AXDescription satisfies a predicate.
+    static func findByDescriptionMatching(
+        _ parent: AXUIElement,
+        maxDepth: Int = 12,
+        currentDepth: Int = 0,
+        predicate: (String) -> Bool
+    ) -> AXUIElement? {
+        guard currentDepth <= maxDepth else { return nil }
+        let desc: String = attribute(parent, kAXDescriptionAttribute) ?? ""
+        if !desc.isEmpty && predicate(desc) { return parent }
+        for child in arrayAttribute(parent, kAXChildrenAttribute) {
+            if let found = findByDescriptionMatching(
+                child, maxDepth: maxDepth,
+                currentDepth: currentDepth + 1,
+                predicate: predicate
+            ) {
+                return found
+            }
+        }
+        return nil
+    }
+
     /// Recursive search for AXMenuItem by exact title.
     static func findMenuItemByTitle(
         _ parent: AXUIElement,

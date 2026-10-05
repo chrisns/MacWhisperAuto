@@ -26,6 +26,13 @@ extension MacWhisperController {
     /// Does any MacWhisper window expose the in-progress Stop button? The
     /// button only exists while MacWhisper is actively recording, so this is
     /// the ground-truth signal.
+    /// 15.3+: "End Meeting" (meeting window) or "Stop Recording" (App Audio view).
+    func anyWindowHasRecordingControl(_ appElement: AXUIElement) -> Bool {
+        AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute).contains { window in
+            Self.recordingControlButton(in: window) != nil
+        }
+    }
+
     func anyWindowHasActiveStopButton(_ appElement: AXUIElement) -> Bool {
         let windows = AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute)
         for window in windows where Self.windowHasActiveStopButton(window) {
