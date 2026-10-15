@@ -30,6 +30,10 @@ final class CGWindowListScanner: @unchecked Sendable {
 
     private let _consumers = OSAllocatedUnfairLock(initialState: [WeakConsumer]())
     private let _shouldPoll = OSAllocatedUnfairLock(initialState: true)
+    /// Last time the stale-permission warning was logged (polls run every few
+    /// seconds; logging each one fills and rotates the log within a day).
+    private let _lastStaleWarning = OSAllocatedUnfairLock<Date?>(initialState: nil)
+    private static let staleWarningInterval: TimeInterval = 600
 
     /// Set to false to suppress polling (e.g. no relevant apps running).
     var shouldPoll: Bool {
@@ -88,7 +92,7 @@ final class CGWindowListScanner: @unchecked Sendable {
         // (many windows visible but almost none have titles)
         if windows.count > 10 {
             let withNames = windows.filter { !$0.windowName.isEmpty }
-            if withNames.count < 5 {
+            if withNames.count < 5 && staleWarningDue() {
                 let msg = "Screen Recording permission may be stale — " +
                     "\(windows.count) windows but only \(withNames.count) have titles. Re-grant in System Settings."
                 DetectionLogger.shared.error(.detection, msg)
@@ -133,6 +137,15 @@ final class CGWindowListScanner: @unchecked Sendable {
                 windowLayer: layer,
                 bounds: bounds
             )
+        }
+    }
+
+    private func staleWarningDue() -> Bool {
+        let now = Date()
+        return _lastStaleWarning.withLock { last in
+            if let last, now.timeIntervalSince(last) < Self.staleWarningInterval { return false }
+            last = now
+            return true
         }
     }
 }
