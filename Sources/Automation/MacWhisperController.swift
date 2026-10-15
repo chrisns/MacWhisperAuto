@@ -162,9 +162,13 @@ final class MacWhisperController: Sendable {
     }
 
     /// Start recording. Tries paths in order:
-    ///   1. New flat menu-extra item ("Record <Platform> Meeting")
-    ///   2. Legacy "Record Meeting > <Platform>" submenu
-    ///   3. In-window per-platform Record button (AXDescription "Record <Platform>")
+    ///   1. In-window per-platform Record button (AXDescription "Record <Platform>").
+    ///      It is on MacWhisper's Home view, so switch the main window to Home
+    ///      first when it shows another view (Queue, a transcript, ...).
+    ///   2. Status-menu extra: flat "Record <Platform> Meeting" item, then the
+    ///      "Record Meeting > <Platform>" submenu. 15.4 no longer exposes this
+    ///      menu to accessibility (and it can be hidden by a menu bar manager),
+    ///      so it is only a fallback for older builds.
     /// FaceTime has no platform-specific entry — it falls through to a
     /// window-based All System Audio recording (in the +FaceTime extension).
     private func performStartRecording(platform: Platform) -> Result<Void, AXError> {
@@ -175,53 +179,45 @@ final class MacWhisperController: Sendable {
             // No upfront `performCheckRecording` pre-check here — MacWhisper's
             // menu extra sometimes shows a stale "Stop Recording" item after a
             // stop, making the menu-only check a false positive. The in-window
-            // Stop button (`pressWindowRecordButton`) is the ground truth and
-            // we check it just before pressing the in-window Record button.
+            // recording controls are the ground truth; `pressWindowRecordButton`
+            // checks them just before pressing Record.
             if let menuTitle = platform.macWhisperMenuTitle {
-                let menuResult = performStartRecordingViaMenu(
+                if let buttonDesc = Self.windowButtonDescription[platform],
+                   let result = pressWindowRecordButton(
+                    appElement: appElement, description: buttonDesc, platform: platform
+                   ) {
+                    return result
+                }
+                return performStartRecordingViaMenu(
                     appElement: appElement, menuTitle: menuTitle, platform: platform
                 )
-                if case .success = menuResult { return menuResult }
-
-                // Final fallback: in-window "Record <Platform>" button by
-                // AXDescription. Exists in MacWhisper's main window regardless
-                // of MacWhisper's own meeting detection state.
-                if let buttonDesc = Self.windowButtonDescription[platform] {
-                    if let result = pressWindowRecordButton(
-                        appElement: appElement, description: buttonDesc, platform: platform
-                    ) {
-                        return result
-                    }
-                }
-                return menuResult
             }
             return performStartSystemAudioRecording(appElement: appElement)
         }
     }
 
-    /// Press the in-window "Record <Platform>" button by AXDescription. Bails
-    /// out (returns success no-op) if the in-window Stop button is also
-    /// present — that's the ground-truth signal that MacWhisper is genuinely
-    /// recording, so pressing Record would start a duplicate.
-    /// Returns `nil` when the Record button isn't present (caller should
-    /// propagate the upstream error).
+    /// Press the in-window "Record <Platform>" button by AXDescription,
+    /// switching the window to Home first if needed. Bails out (returns
+    /// success no-op) if any window shows an in-progress recording control —
+    /// that's the ground-truth signal that MacWhisper is genuinely recording,
+    /// so pressing Record would start a duplicate.
+    /// Returns `nil` when the Record button isn't found (caller should try
+    /// the next path).
     private func pressWindowRecordButton(
         appElement: AXUIElement, description: String, platform: Platform
     ) -> Result<Void, AXError>? {
         let windows = AccessibilityHelper.arrayAttribute(appElement, kAXWindowsAttribute)
-        for window in windows {
-            guard let button = AccessibilityHelper.findByDescription(
-                window, description: description
-            ) else { continue }
-            if Self.windowHasActiveStopButton(window) {
-                DetectionLogger.shared.automation(
-                    "In-window Stop button present — MacWhisper is genuinely recording, no-op",
-                    action: "startRecording"
-                )
-                return .success(())
-            }
+        if windows.contains(where: Self.windowHasActiveStopButton) {
             DetectionLogger.shared.automation(
-                "Falling back to in-window '\(description)' button", action: "startRecording"
+                "In-window recording control present — MacWhisper is genuinely recording, no-op",
+                action: "startRecording"
+            )
+            return .success(())
+        }
+        for window in windows {
+            guard let button = Self.findOnHomeView(window, description: description) else { continue }
+            DetectionLogger.shared.automation(
+                "Pressing in-window '\(description)' button", action: "startRecording"
             )
             let result = AccessibilityHelper.press(button)
             if case .success = result {
@@ -232,6 +228,9 @@ final class MacWhisperController: Sendable {
             }
             return result
         }
+        DetectionLogger.shared.automation(
+            "No in-window '\(description)' button, trying the status menu", action: "startRecording"
+        )
         return nil
     }
 

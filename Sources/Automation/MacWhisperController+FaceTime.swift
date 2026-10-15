@@ -52,44 +52,13 @@ extension MacWhisperController {
             return startSystemAudioViaAppAudioView(window: window, appAudioButton: nil)
         }
         for window in windows {
-            guard let appAudio = findAppAudioButton(in: window) else { continue }
+            guard let appAudio = Self.findOnHomeView(window, description: "App Audio") else { continue }
             return startSystemAudioViaAppAudioView(window: window, appAudioButton: appAudio)
         }
 
         return .failure(
             .elementNotFound(description: "Record All System Audio / App Audio")
         )
-    }
-
-    private func findAppAudioButton(in window: AXUIElement) -> AXUIElement? {
-        if let button = AccessibilityHelper.findByDescription(
-            window, description: "App Audio", maxDepth: 12
-        ) {
-            return button
-        }
-        guard let home = AccessibilityHelper.findByDescription(
-            window, description: "Home", maxDepth: 12
-        ) else { return nil }
-        DetectionLogger.shared.automation(
-            "App Audio not visible, switching MacWhisper to Home", action: "startRecording"
-        )
-        // Sidebar items ignore AXPress; selecting their outline row navigates.
-        guard let row = Self.ancestor(of: home, role: kAXRowRole),
-              AXUIElementSetAttributeValue(
-                row, kAXSelectedAttribute as CFString, kCFBooleanTrue
-              ) == .success else { return nil }
-        Thread.sleep(forTimeInterval: 0.7)
-        return AccessibilityHelper.findByDescription(window, description: "App Audio", maxDepth: 12)
-    }
-
-    private static func ancestor(of element: AXUIElement, role: String, maxLevels: Int = 4) -> AXUIElement? {
-        var current: AXUIElement? = element
-        for _ in 0..<maxLevels {
-            guard let node = current else { return nil }
-            if (AccessibilityHelper.attribute(node, kAXRoleAttribute) as String?) == role { return node }
-            current = AccessibilityHelper.attribute(node, kAXParentAttribute)
-        }
-        return nil
     }
 
     private func startSystemAudioViaAppAudioView(
