@@ -541,8 +541,11 @@ extension AppDelegate {
         DetectionLogger.shared.lifecycle("MacWhisper terminated")
         appState.addActivity("MacWhisper quit")
 
-        // If we were recording, MacWhisper quitting is an error condition
-        if appState.isRecording {
+        // If we meant to record, MacWhisper quitting is an error condition.
+        // Check intent, not `isRecording`: the observation poll may not have
+        // confirmed the recording yet. The error clears when MacWhisper
+        // launches again, and the next active signal starts a new recording.
+        if case .recording = appState.meetingState {
             coordinator?.reportError(.macWhisperNotRunning)
             appState.addActivity("MacWhisper quit during recording!")
         }
@@ -623,18 +626,30 @@ extension AppDelegate {
                     }
                 } else {
                     // true → false: MacWhisper stopped recording. If intent
-                    // is still .recording, that means MacWhisper was stopped
-                    // externally (user pressed Finish, or MacWhisper crashed).
-                    if case .recording = stateRef.meetingState {
+                    // is still .recording, the user ended it in MacWhisper.
+                    // If MacWhisper quit, handleAppTerminated owns recovery.
+                    if case .recording = stateRef.meetingState,
+                       Self.isMacWhisperRunning {
+                        DetectionLogger.shared.automation(
+                            "Recording stopped externally", action: "stopRecording"
+                        )
                         stateRef.addActivity(
                             "Recording stopped externally", platform: platform
                         )
-                        stateRef.updateState(.idle)
+                        self.coordinator?.handleRecordingStoppedExternally()
                         self.stopRecordingObservation()
                     }
                 }
             }
         }
+    }
+}
+
+extension AppDelegate {
+    static var isMacWhisperRunning: Bool {
+        !NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.goodsnooze.MacWhisper"
+        ).isEmpty
     }
 }
 
