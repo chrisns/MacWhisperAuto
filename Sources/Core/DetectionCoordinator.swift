@@ -129,6 +129,13 @@ final class DetectionCoordinator {
         dispatchEffects(effects)
     }
 
+    /// MacWhisper stopped the recording itself (the user ended it there).
+    func handleRecordingStoppedExternally() {
+        let effects = stateMachine.recordingStoppedExternally()
+        appState.updateState(stateMachine.state)
+        dispatchEffects(effects)
+    }
+
     /// Report an error to the state machine.
     func reportError(_ error: ErrorKind) {
         let effects = stateMachine.setError(error)
